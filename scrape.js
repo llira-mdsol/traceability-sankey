@@ -198,7 +198,7 @@ async function doLogin(page) {
         await sleep(pollInterval);
 
         // Try to call the API from whatever page we're on
-        const result = await page.evaluate(async (baseUrl, apiVer) => {
+        const result = await page.evaluate(async ({ baseUrl, apiVer }) => {
             try {
                 const resp = await fetch(`${baseUrl}/rest/api/${apiVer}/myself`, {
                     credentials: 'include',
@@ -212,7 +212,7 @@ async function doLogin(page) {
             } catch {
                 return null;
             }
-        }, CONFIG.jiraBaseUrl, CONFIG.apiVersion);
+        }, { baseUrl: CONFIG.jiraBaseUrl, apiVer: CONFIG.apiVersion });
 
         if (result) {
             console.log(`\n   ✅ Logged in as: ${result}`);
