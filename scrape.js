@@ -19,7 +19,7 @@ const path = require('path');
 // ===== CONFIGURATION =====
 const CONFIG = {
     // Your JIRA Cloud instance (set via env or edit here)
-    jiraBaseUrl: process.env.JIRA_BASE_URL || 'https://your-org.atlassian.net',
+    jiraBaseUrl: process.env.JIRA_BASE_URL || 'https://jira.mdsol.com',
 
     // Where to save the browser session between runs
     sessionDir: path.join(__dirname, '.auth-session'),
@@ -44,6 +44,9 @@ const CONFIG = {
         'Sub-task': 4,
         'Bug': 4,
     },
+
+    // REST API version (use 'latest' for auto-detection, '2' for Server/DC, '3' for Cloud)
+    apiVersion: '2',
 
     // Headless mode (set false to watch the browser)
     headless: true,
@@ -131,7 +134,7 @@ async function main() {
 async function checkSession(page) {
     try {
         // Try hitting the JIRA API to see if session is valid
-        const response = await page.goto(`${CONFIG.jiraBaseUrl}/rest/api/3/myself`, {
+        const response = await page.goto(`${CONFIG.jiraBaseUrl}/rest/api/${CONFIG.apiVersion}/myself`, {
             waitUntil: 'domcontentloaded',
             timeout: 10000
         });
@@ -152,17 +155,19 @@ async function doLogin(page) {
     console.log('🔐 Login required. Opening JIRA login page...');
     console.log('   Please log in manually in the browser window.\n');
 
-    // Navigate to JIRA — it will redirect to Atlassian login
+    // Navigate to JIRA — it will redirect to login
     await page.goto(CONFIG.jiraBaseUrl, { waitUntil: 'networkidle' });
 
     // Wait for the user to complete login (detect when we land on a JIRA page)
     console.log('   Waiting for login to complete...');
     await page.waitForURL(url => {
         const href = url.toString();
-        return href.includes('/jira') ||
+        return href.includes('/secure/') ||
                href.includes('/browse') ||
                href.includes('/projects') ||
-               (href.includes('.atlassian.net') && !href.includes('id.atlassian.com'));
+               href.includes('/jira') ||
+               href.includes('Dashboard.jspa') ||
+               (href.includes(new URL(CONFIG.jiraBaseUrl).hostname) && !href.includes('/login'));
     }, { timeout: 300000 }); // 5 min timeout for login
 
     // Give it a moment to settle
@@ -195,7 +200,7 @@ async function fetchJSON(page, url) {
 }
 
 async function fetchIssue(page, key) {
-    const url = `${CONFIG.jiraBaseUrl}/rest/api/3/issue/${key}?fields=summary,issuetype,status,issuelinks,parent,subtasks,project`;
+    const url = `${CONFIG.jiraBaseUrl}/rest/api/${CONFIG.apiVersion}/issue/${key}?fields=summary,issuetype,status,issuelinks,parent,subtasks,project`;
     const data = await fetchJSON(page, url);
 
     if (data?.error) {
@@ -215,7 +220,7 @@ async function fetchIssue(page, key) {
 
 async function fetchChildIssues(page, parentKey) {
     const jql = encodeURIComponent(`parent = ${parentKey} OR "Epic Link" = ${parentKey}`);
-    const url = `${CONFIG.jiraBaseUrl}/rest/api/3/search?jql=${jql}&fields=key,summary,issuetype,status,issuelinks&maxResults=100`;
+    const url = `${CONFIG.jiraBaseUrl}/rest/api/${CONFIG.apiVersion}/search?jql=${jql}&fields=key,summary,issuetype,status,issuelinks&maxResults=100`;
     const data = await fetchJSON(page, url);
 
     if (data?.error) {
