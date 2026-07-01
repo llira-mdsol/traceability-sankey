@@ -166,8 +166,8 @@ async function getAuthCookies() {
     // Block heavy resources to prevent crashes during login
     await page.route('**/*', (route) => {
         const type = route.request().resourceType();
-        // Block images, fonts, media, and large scripts to keep it lightweight
-        if (['image', 'font', 'media'].includes(type)) {
+        // Only block images and media — allow scripts/CSS/fonts for SSO to work
+        if (['image', 'media'].includes(type)) {
             route.abort();
         } else {
             route.continue();
@@ -177,44 +177,50 @@ async function getAuthCookies() {
     // Navigate to JIRA login
     await page.goto(CONFIG.jiraBaseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    // Poll until authenticated
-    console.log('   Waiting for login to complete (polling every 3s)...');
+    // Poll until authenticated — use a second tab to hit the API directly
+    console.log('   Waiting for login to complete (polling every 5s)...');
+    console.log('   (Complete login in the browser, then wait for detection)\n');
     const maxWait = 300000;
     const startTime = Date.now();
     let loggedIn = false;
+    let savedCookies = null;
 
     while (Date.now() - startTime < maxWait) {
-        await sleep(3000);
-
-        // Check if we can hit the API with current cookies
-        const cookies = await context.cookies();
-        const testContext = await request.newContext({
-            baseURL: CONFIG.jiraBaseUrl,
-            storageState: { cookies: cookies, origins: [] },
-            ignoreHTTPSErrors: true,
-            extraHTTPHeaders: { 'Accept': 'application/json' },
-        });
+        await sleep(5000);
 
         try {
-            const resp = await testContext.get(`/rest/api/${CONFIG.apiVersion}/myself`);
-            if (resp.ok()) {
-                const data = await resp.json();
-                if (data.displayName || data.name) {
-                    console.log(`\n   ✅ Login detected: ${data.displayName || data.name}`);
-                    loggedIn = true;
+            // Open API endpoint in a new tab (shares cookies with main page)
+            const apiPage = await context.newPage();
+            const resp = await apiPage.goto(
+                `${CONFIG.jiraBaseUrl}/rest/api/${CONFIG.apiVersion}/myself`,
+                { waitUntil: 'commit', timeout: 10000 }
+            );
 
-                    // Save cookies for future runs
-                    fs.writeFileSync(CONFIG.cookieFile, JSON.stringify(cookies, null, 2));
-                    console.log('   Cookies saved.\n');
+            if (resp && resp.status() === 200) {
+                const body = await apiPage.evaluate(() => document.body?.innerText || '');
+                await apiPage.close();
 
-                    await testContext.dispose();
-                    break;
+                try {
+                    const data = JSON.parse(body);
+                    if (data.displayName || data.name) {
+                        console.log(`   ✅ Login detected: ${data.displayName || data.name}`);
+                        loggedIn = true;
+
+                        // Extract and save cookies
+                        savedCookies = await context.cookies();
+                        fs.writeFileSync(CONFIG.cookieFile, JSON.stringify(savedCookies, null, 2));
+                        console.log('   Cookies saved.\n');
+                        break;
+                    }
+                } catch {
+                    // Not JSON — probably login page redirect
                 }
+            } else {
+                await apiPage.close();
             }
         } catch {
-            // Not logged in yet
+            // Page may have crashed or timed out — that's ok, keep polling
         }
-        await testContext.dispose();
         process.stdout.write('.');
     }
 
@@ -224,7 +230,7 @@ async function getAuthCookies() {
         throw new Error('Login timed out after 5 minutes. Try again.');
     }
 
-    return JSON.parse(fs.readFileSync(CONFIG.cookieFile, 'utf8'));
+    return savedCookies;
 }
 
 // ===== HTTP API =====
