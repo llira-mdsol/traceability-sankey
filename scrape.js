@@ -145,62 +145,84 @@ async function main() {
 
 async function checkSession(page) {
     try {
-        // First navigate to a lightweight JIRA page to establish context
-        await page.goto(`${CONFIG.jiraBaseUrl}/status`, {
-            waitUntil: 'domcontentloaded',
+        // Navigate to a JIRA page to establish cookie context
+        const response = await page.goto(`${CONFIG.jiraBaseUrl}/rest/api/${CONFIG.apiVersion}/myself`, {
+            waitUntil: 'commit',
             timeout: 30000
         });
 
-        // Then use fetch from within the page to check auth
-        const result = await page.evaluate(async (baseUrl, apiVer) => {
-            try {
-                const resp = await fetch(`${baseUrl}/rest/api/${apiVer}/myself`, {
-                    credentials: 'same-origin',
-                    headers: { 'Accept': 'application/json' }
-                });
-                if (resp.ok) return await resp.json();
-                return null;
-            } catch {
-                return null;
-            }
-        }, CONFIG.jiraBaseUrl, CONFIG.apiVersion);
+        // If we get redirected to login, session is invalid
+        const finalUrl = page.url();
+        if (finalUrl.includes('/login') || finalUrl.includes('login.jsp') || finalUrl.includes('os_destination')) {
+            return false;
+        }
 
-        if (result && result.displayName) {
-            console.log(`   Logged in as: ${result.displayName} (${result.emailAddress || result.name})`);
-            return true;
+        if (response && response.status() === 200) {
+            const body = await page.evaluate(() => document.body?.innerText || '');
+            try {
+                const user = JSON.parse(body);
+                if (user.displayName || user.name) {
+                    console.log(`   Logged in as: ${user.displayName || user.name}`);
+                    return true;
+                }
+            } catch {
+                // Response wasn't JSON — probably a login page
+                return false;
+            }
         }
         return false;
-    } catch {
+    } catch (err) {
+        console.log(`   Session check failed: ${err.message}`);
         return false;
     }
 }
 
 async function doLogin(page) {
     console.log('🔐 Login required. Opening JIRA login page...');
-    console.log('   Please log in manually in the browser window.\n');
+    console.log('   Please log in manually in the browser window.');
+    console.log('   (You have 5 minutes to complete login)\n');
 
     // Navigate to JIRA — it will redirect to login
     await page.goto(CONFIG.jiraBaseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    // Wait for the user to complete login (detect when we land on a JIRA page)
+    // Wait for the user to complete login
+    // Strategy: poll for successful API response instead of URL matching
     console.log('   Waiting for login to complete...');
-    await page.waitForURL(url => {
-        const href = url.toString();
-        return href.includes('/secure/') ||
-               href.includes('/browse') ||
-               href.includes('/projects') ||
-               href.includes('/jira') ||
-               href.includes('Dashboard.jspa') ||
-               (href.includes(new URL(CONFIG.jiraBaseUrl).hostname) && !href.includes('/login'));
-    }, { timeout: 300000 }); // 5 min timeout for login
 
-    // Give it a moment to settle
-    await page.waitForTimeout(2000);
+    const maxWait = 300000; // 5 minutes
+    const pollInterval = 3000; // check every 3 seconds
+    const startTime = Date.now();
+    let loggedIn = false;
 
-    // Verify
-    const valid = await checkSession(page);
-    if (!valid) {
-        throw new Error('Login appeared to complete but session is not valid. Try again with --login');
+    while (Date.now() - startTime < maxWait) {
+        await sleep(pollInterval);
+
+        // Try to call the API from whatever page we're on
+        const result = await page.evaluate(async (baseUrl, apiVer) => {
+            try {
+                const resp = await fetch(`${baseUrl}/rest/api/${apiVer}/myself`, {
+                    credentials: 'include',
+                    headers: { 'Accept': 'application/json' }
+                });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    return data.displayName || data.name || null;
+                }
+                return null;
+            } catch {
+                return null;
+            }
+        }, CONFIG.jiraBaseUrl, CONFIG.apiVersion);
+
+        if (result) {
+            console.log(`\n   ✅ Logged in as: ${result}`);
+            loggedIn = true;
+            break;
+        }
+    }
+
+    if (!loggedIn) {
+        throw new Error('Login timed out after 5 minutes. Try again with --login --headed');
     }
 
     console.log('   Session saved for future runs.\n');
