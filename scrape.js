@@ -7,30 +7,30 @@
  *   node scrape.js MDSO-25672         # scrape a specific project
  *   node scrape.js MDSO-25672 --login # force re-login
  *
- * This opens a real browser, uses your saved JIRA session (or prompts login),
- * and crawls the issue link hierarchy via JIRA's REST API from inside the
- * authenticated browser context. No API tokens needed.
+ * Strategy:
+ *   1. Login phase: Opens a browser for manual login, extracts session cookies
+ *   2. Scrape phase: Uses pure HTTP requests (no page rendering) with those cookies
+ *
+ * This avoids page crashes from JIRA's heavy frontend.
  */
 
-const { chromium } = require('playwright');
+const { chromium, request } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
 // ===== CONFIGURATION =====
 const CONFIG = {
-    // Your JIRA Cloud instance (set via env or edit here)
     jiraBaseUrl: process.env.JIRA_BASE_URL || 'https://jira.mdsol.com',
 
-    // Where to save the browser session between runs
-    sessionDir: path.join(__dirname, '.auth-session'),
+    // Where to save cookies between runs
+    cookieFile: path.join(__dirname, '.auth-cookies.json'),
 
     // Output directory for scraped JSON
     outputDir: path.join(__dirname, 'output'),
 
     // Crawl settings
     maxDepth: 6,
-    requestDelay: 400, // ms between API calls
-    concurrency: 2,
+    requestDelay: 400,
 
     // Issue type → layer mapping
     layerMapping: {
@@ -45,11 +45,8 @@ const CONFIG = {
         'Bug': 4,
     },
 
-    // REST API version (use 'latest' for auto-detection, '2' for Server/DC, '3' for Cloud)
+    // REST API version ('2' for Server/DC, '3' for Cloud)
     apiVersion: '2',
-
-    // Headless mode (set false to watch the browser)
-    headless: true,
 };
 
 // ===== STATE =====
@@ -70,60 +67,52 @@ if (!issueKey) {
     console.error('');
     console.error('Options:');
     console.error('  --login   Force re-login (clear saved session)');
-    console.error('  --headed  Show the browser window');
+    console.error('  --headed  Show the browser window during login');
     process.exit(1);
-}
-
-if (showBrowser) {
-    CONFIG.headless = false;
 }
 
 // ===== MAIN =====
 async function main() {
     console.log(`\n🔗 Traceability Scraper — ${issueKey}`);
-    console.log(`   JIRA: ${CONFIG.jiraBaseUrl}`);
-    console.log(`   Session: ${CONFIG.sessionDir}\n`);
+    console.log(`   JIRA: ${CONFIG.jiraBaseUrl}\n`);
 
-    // Clear session if forced
-    if (forceLogin && fs.existsSync(CONFIG.sessionDir)) {
-        fs.rmSync(CONFIG.sessionDir, { recursive: true });
-        console.log('   Cleared saved session.\n');
+    // Clear cookies if forced
+    if (forceLogin && fs.existsSync(CONFIG.cookieFile)) {
+        fs.unlinkSync(CONFIG.cookieFile);
+        console.log('   Cleared saved cookies.\n');
     }
 
     // Ensure output dir exists
     fs.mkdirSync(CONFIG.outputDir, { recursive: true });
 
-    // Launch browser with persistent context (saves cookies/localStorage)
-    const browser = await chromium.launchPersistentContext(CONFIG.sessionDir, {
-        headless: CONFIG.headless,
-        viewport: { width: 1280, height: 800 },
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        args: [
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-extensions',
-            '--disable-background-networking',
-            '--disable-default-apps',
-            '--js-flags=--max-old-space-size=4096',
-        ],
+    // Get authenticated cookies (login if needed)
+    const cookies = await getAuthCookies();
+
+    // Create an API context using those cookies (pure HTTP — no browser page needed)
+    const apiContext = await request.newContext({
+        baseURL: CONFIG.jiraBaseUrl,
+        extraHTTPHeaders: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+        },
+        storageState: {
+            cookies: cookies,
+            origins: []
+        },
         ignoreHTTPSErrors: true,
-        timeout: 60000,
     });
 
-    const page = await browser.newPage();
-
-    // Check if we have a valid session
-    const loggedIn = await checkSession(page);
-    if (!loggedIn) {
-        await doLogin(page);
+    // Verify session works
+    const myself = await apiGet(apiContext, `/rest/api/${CONFIG.apiVersion}/myself`);
+    if (!myself || myself.error) {
+        console.error('   ❌ Session invalid. Run again with --login');
+        await apiContext.dispose();
+        process.exit(1);
     }
-
-    console.log('✅ Authenticated. Starting crawl...\n');
+    console.log(`   ✅ Authenticated as: ${myself.displayName || myself.name}\n`);
 
     // Crawl the issue hierarchy
-    await crawl(page, issueKey.toUpperCase(), 0);
+    await crawl(apiContext, issueKey.toUpperCase(), 0);
 
     // Build output
     const output = buildOutput(issueKey.toUpperCase());
@@ -138,152 +127,149 @@ async function main() {
     console.log(`   Links: ${output.links.length}`);
     console.log(`   Output: ${outputPath}\n`);
 
-    await browser.close();
+    await apiContext.dispose();
 }
 
 // ===== AUTH =====
 
-async function checkSession(page) {
-    try {
-        // Navigate to a JIRA page to establish cookie context
-        const response = await page.goto(`${CONFIG.jiraBaseUrl}/rest/api/${CONFIG.apiVersion}/myself`, {
-            waitUntil: 'commit',
-            timeout: 30000
-        });
-
-        // If we get redirected to login, session is invalid
-        const finalUrl = page.url();
-        if (finalUrl.includes('/login') || finalUrl.includes('login.jsp') || finalUrl.includes('os_destination')) {
-            return false;
-        }
-
-        if (response && response.status() === 200) {
-            const body = await page.evaluate(() => document.body?.innerText || '');
-            try {
-                const user = JSON.parse(body);
-                if (user.displayName || user.name) {
-                    console.log(`   Logged in as: ${user.displayName || user.name}`);
-                    return true;
-                }
-            } catch {
-                // Response wasn't JSON — probably a login page
-                return false;
-            }
-        }
-        return false;
-    } catch (err) {
-        console.log(`   Session check failed: ${err.message}`);
-        return false;
+/**
+ * Get cookies — either from saved file or by launching a browser for login.
+ */
+async function getAuthCookies() {
+    // Try saved cookies first
+    if (fs.existsSync(CONFIG.cookieFile)) {
+        const cookies = JSON.parse(fs.readFileSync(CONFIG.cookieFile, 'utf8'));
+        console.log('   Using saved session cookies...');
+        return cookies;
     }
-}
 
-async function doLogin(page) {
-    console.log('🔐 Login required. Opening JIRA login page...');
-    console.log('   Please log in manually in the browser window.');
-    console.log('   (You have 5 minutes to complete login)\n');
+    // Need to login via browser
+    console.log('🔐 Login required. Opening browser...');
+    console.log('   Log in to JIRA manually. The browser will close automatically.\n');
 
-    // Navigate to JIRA — it will redirect to login
+    const browser = await chromium.launch({
+        headless: false, // Always show browser for login
+        args: [
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--no-sandbox',
+        ],
+    });
+
+    const context = await browser.newContext({
+        ignoreHTTPSErrors: true,
+        viewport: { width: 1280, height: 800 },
+    });
+
+    const page = await context.newPage();
+
+    // Block heavy resources to prevent crashes during login
+    await page.route('**/*', (route) => {
+        const type = route.request().resourceType();
+        // Block images, fonts, media, and large scripts to keep it lightweight
+        if (['image', 'font', 'media'].includes(type)) {
+            route.abort();
+        } else {
+            route.continue();
+        }
+    });
+
+    // Navigate to JIRA login
     await page.goto(CONFIG.jiraBaseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    // Wait for the user to complete login
-    // Strategy: poll for successful API response instead of URL matching
-    console.log('   Waiting for login to complete...');
-
-    const maxWait = 300000; // 5 minutes
-    const pollInterval = 3000; // check every 3 seconds
+    // Poll until authenticated
+    console.log('   Waiting for login to complete (polling every 3s)...');
+    const maxWait = 300000;
     const startTime = Date.now();
     let loggedIn = false;
 
     while (Date.now() - startTime < maxWait) {
-        await sleep(pollInterval);
+        await sleep(3000);
 
-        // Try to call the API from whatever page we're on
-        const result = await page.evaluate(async ({ baseUrl, apiVer }) => {
-            try {
-                const resp = await fetch(`${baseUrl}/rest/api/${apiVer}/myself`, {
-                    credentials: 'include',
-                    headers: { 'Accept': 'application/json' }
-                });
-                if (resp.ok) {
-                    const data = await resp.json();
-                    return data.displayName || data.name || null;
+        // Check if we can hit the API with current cookies
+        const cookies = await context.cookies();
+        const testContext = await request.newContext({
+            baseURL: CONFIG.jiraBaseUrl,
+            storageState: { cookies: cookies, origins: [] },
+            ignoreHTTPSErrors: true,
+            extraHTTPHeaders: { 'Accept': 'application/json' },
+        });
+
+        try {
+            const resp = await testContext.get(`/rest/api/${CONFIG.apiVersion}/myself`);
+            if (resp.ok()) {
+                const data = await resp.json();
+                if (data.displayName || data.name) {
+                    console.log(`\n   ✅ Login detected: ${data.displayName || data.name}`);
+                    loggedIn = true;
+
+                    // Save cookies for future runs
+                    fs.writeFileSync(CONFIG.cookieFile, JSON.stringify(cookies, null, 2));
+                    console.log('   Cookies saved.\n');
+
+                    await testContext.dispose();
+                    break;
                 }
-                return null;
-            } catch {
-                return null;
             }
-        }, { baseUrl: CONFIG.jiraBaseUrl, apiVer: CONFIG.apiVersion });
-
-        if (result) {
-            console.log(`\n   ✅ Logged in as: ${result}`);
-            loggedIn = true;
-            break;
+        } catch {
+            // Not logged in yet
         }
+        await testContext.dispose();
+        process.stdout.write('.');
     }
+
+    await browser.close();
 
     if (!loggedIn) {
-        throw new Error('Login timed out after 5 minutes. Try again with --login --headed');
+        throw new Error('Login timed out after 5 minutes. Try again.');
     }
 
-    console.log('   Session saved for future runs.\n');
+    return JSON.parse(fs.readFileSync(CONFIG.cookieFile, 'utf8'));
 }
 
-// ===== JIRA API (via browser context) =====
+// ===== HTTP API =====
 
-async function fetchJSON(page, url) {
-    const response = await page.evaluate(async (fetchUrl) => {
-        const resp = await fetch(fetchUrl, {
-            credentials: 'same-origin',
-            headers: { 'Accept': 'application/json' }
-        });
-        if (!resp.ok) {
-            return { error: resp.status, statusText: resp.statusText };
-        }
-        return resp.json();
-    }, url);
-
-    return response;
-}
-
-async function fetchIssue(page, key) {
-    const url = `${CONFIG.jiraBaseUrl}/rest/api/${CONFIG.apiVersion}/issue/${key}?fields=summary,issuetype,status,issuelinks,parent,subtasks,project`;
-    const data = await fetchJSON(page, url);
-
-    if (data?.error) {
-        if (data.error === 429) {
-            // Rate limited — wait and retry
+/**
+ * Make a GET request using the API context (pure HTTP, no browser page).
+ */
+async function apiGet(apiContext, endpoint) {
+    try {
+        const resp = await apiContext.get(endpoint);
+        if (resp.status() === 429) {
             console.log(`   ⏳ Rate limited, waiting 3s...`);
             await sleep(3000);
-            return fetchIssue(page, key);
+            return apiGet(apiContext, endpoint);
         }
-        if (data.error === 404) return null;
-        console.warn(`   ⚠️  Failed to fetch ${key}: ${data.error} ${data.statusText || ''}`);
+        if (resp.status() === 404) return null;
+        if (!resp.ok()) {
+            return { error: resp.status(), statusText: resp.statusText() };
+        }
+        return await resp.json();
+    } catch (err) {
+        return { error: 0, statusText: err.message };
+    }
+}
+
+async function fetchIssue(apiContext, key) {
+    const data = await apiGet(apiContext, `/rest/api/${CONFIG.apiVersion}/issue/${key}?fields=summary,issuetype,status,issuelinks,parent,subtasks,project`);
+    if (data?.error) {
+        if (data.error !== 404) {
+            console.warn(`   ⚠️  Failed to fetch ${key}: ${data.error} ${data.statusText || ''}`);
+        }
         return null;
     }
-
     return data;
 }
 
-async function fetchChildIssues(page, parentKey) {
+async function fetchChildIssues(apiContext, parentKey) {
     const jql = encodeURIComponent(`parent = ${parentKey} OR "Epic Link" = ${parentKey}`);
-    const url = `${CONFIG.jiraBaseUrl}/rest/api/${CONFIG.apiVersion}/search?jql=${jql}&fields=key,summary,issuetype,status,issuelinks&maxResults=100`;
-    const data = await fetchJSON(page, url);
-
-    if (data?.error) {
-        if (data.error === 429) {
-            await sleep(3000);
-            return fetchChildIssues(page, parentKey);
-        }
-        return [];
-    }
-
+    const data = await apiGet(apiContext, `/rest/api/${CONFIG.apiVersion}/search?jql=${jql}&fields=key,summary,issuetype,status,issuelinks&maxResults=100`);
+    if (data?.error) return [];
     return data?.issues || [];
 }
 
-async function fetchDevInfo(page, issueId) {
-    const url = `${CONFIG.jiraBaseUrl}/rest/dev-status/latest/issue/detail?issueId=${issueId}&applicationType=GitHub&dataType=pullrequest`;
-    const data = await fetchJSON(page, url);
-
+async function fetchDevInfo(apiContext, issueId) {
+    const data = await apiGet(apiContext, `/rest/dev-status/latest/issue/detail?issueId=${issueId}&applicationType=GitHub&dataType=pullrequest`);
     if (data?.error) return [];
 
     const prs = [];
@@ -337,7 +323,7 @@ function processIssue(issue) {
     };
 }
 
-async function crawl(page, key, depth) {
+async function crawl(apiContext, key, depth) {
     if (depth > CONFIG.maxDepth) return;
     if (visited.has(key)) return;
 
@@ -346,7 +332,7 @@ async function crawl(page, key, depth) {
     const indent = '  '.repeat(Math.min(depth, 4));
     process.stdout.write(`\r   ${progress} ${indent}${key}...`);
 
-    const issue = await fetchIssue(page, key);
+    const issue = await fetchIssue(apiContext, key);
     if (!issue) {
         completedRequests++;
         return;
@@ -409,7 +395,7 @@ async function crawl(page, key, depth) {
 
     // Child issues (for epics and above)
     if (nodeData.layer <= 3) {
-        const children = await fetchChildIssues(page, key);
+        const children = await fetchChildIssues(apiContext, key);
         for (const child of children) {
             const childKey = child.key;
             if (!visited.has(childKey)) {
@@ -423,7 +409,7 @@ async function crawl(page, key, depth) {
 
     // PRs for stories
     if (nodeData.layer >= 4 && issue.id) {
-        const prs = await fetchDevInfo(page, issue.id);
+        const prs = await fetchDevInfo(apiContext, issue.id);
         for (const pr of prs) {
             if (!visited.has(pr.id)) {
                 visited.set(pr.id, {
@@ -443,7 +429,7 @@ async function crawl(page, key, depth) {
 
     // Crawl linked issues
     for (const nextKey of toCrawl) {
-        await crawl(page, nextKey, depth + 1);
+        await crawl(apiContext, nextKey, depth + 1);
     }
 }
 
@@ -474,7 +460,6 @@ function buildOutput(startKey) {
             linkSet.add(reverseKey);
             uniqueLinks.push({ source: link.target, target: link.source, value: link.value });
         }
-        // Skip same-layer links
     }
 
     return {
