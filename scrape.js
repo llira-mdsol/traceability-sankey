@@ -98,6 +98,18 @@ async function main() {
         headless: CONFIG.headless,
         viewport: { width: 1280, height: 800 },
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        args: [
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-extensions',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--js-flags=--max-old-space-size=4096',
+        ],
+        ignoreHTTPSErrors: true,
+        timeout: 60000,
     });
 
     const page = await browser.newPage();
@@ -133,16 +145,28 @@ async function main() {
 
 async function checkSession(page) {
     try {
-        // Try hitting the JIRA API to see if session is valid
-        const response = await page.goto(`${CONFIG.jiraBaseUrl}/rest/api/${CONFIG.apiVersion}/myself`, {
+        // First navigate to a lightweight JIRA page to establish context
+        await page.goto(`${CONFIG.jiraBaseUrl}/status`, {
             waitUntil: 'domcontentloaded',
-            timeout: 10000
+            timeout: 30000
         });
 
-        if (response.status() === 200) {
-            const body = await page.evaluate(() => document.body.innerText);
-            const user = JSON.parse(body);
-            console.log(`   Logged in as: ${user.displayName} (${user.emailAddress})`);
+        // Then use fetch from within the page to check auth
+        const result = await page.evaluate(async (baseUrl, apiVer) => {
+            try {
+                const resp = await fetch(`${baseUrl}/rest/api/${apiVer}/myself`, {
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json' }
+                });
+                if (resp.ok) return await resp.json();
+                return null;
+            } catch {
+                return null;
+            }
+        }, CONFIG.jiraBaseUrl, CONFIG.apiVersion);
+
+        if (result && result.displayName) {
+            console.log(`   Logged in as: ${result.displayName} (${result.emailAddress || result.name})`);
             return true;
         }
         return false;
@@ -156,7 +180,7 @@ async function doLogin(page) {
     console.log('   Please log in manually in the browser window.\n');
 
     // Navigate to JIRA — it will redirect to login
-    await page.goto(CONFIG.jiraBaseUrl, { waitUntil: 'networkidle' });
+    await page.goto(CONFIG.jiraBaseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     // Wait for the user to complete login (detect when we land on a JIRA page)
     console.log('   Waiting for login to complete...');
