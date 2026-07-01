@@ -64,7 +64,7 @@
             border-color: #4fc3f7;
         }
 
-        button#loadBtn {
+        button#loadBtn, button#importBtn, button#pasteBtn {
             background: #0f3460;
             color: #4fc3f7;
             border: 1px solid #4fc3f7;
@@ -75,8 +75,13 @@
             transition: background 0.2s;
         }
 
-        button#loadBtn:hover {
+        button#loadBtn:hover, button#importBtn:hover, button#pasteBtn:hover {
             background: #1a4a7a;
+        }
+
+        button#importBtn, button#pasteBtn {
+            border-color: #66bb6a;
+            color: #66bb6a;
         }
 
         .legend {
@@ -160,7 +165,10 @@
             <label for="mdso-ref">MDSO Project:</label>
             <input type="text" id="mdso-ref" placeholder="e.g. MDSO-1234" value="MDSO-1001">
         </div>
-        <button id="loadBtn" onclick="loadDiagram()">Load Traceability</button>
+        <button id="loadBtn" onclick="loadDiagram()">Load Sample</button>
+        <button id="importBtn" onclick="document.getElementById('json-file').click()">Import JSON</button>
+        <button id="pasteBtn" onclick="pasteFromClipboard()">Paste JSON</button>
+        <input type="file" id="json-file" accept=".json" style="display:none" onchange="importJSONFile(event)">
         <div class="legend">
             <div class="legend-item"><div class="legend-dot" style="background:#e57373"></div>Objectives</div>
             <div class="legend-item"><div class="legend-dot" style="background:#ffb74d"></div>Initiatives</div>

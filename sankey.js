@@ -162,3 +162,71 @@ document.addEventListener('DOMContentLoaded', () => {
 document.getElementById('mdso-ref').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') loadDiagram();
 });
+
+/**
+ * Import JSON from a file upload
+ */
+function importJSONFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const data = JSON.parse(e.target.result);
+            loadFromJSON(data);
+        } catch (err) {
+            updateStatus(`❌ Invalid JSON file: ${err.message}`, 'error');
+        }
+    };
+    reader.readAsText(file);
+    // Reset input so same file can be re-imported
+    event.target.value = '';
+}
+
+/**
+ * Paste JSON from clipboard
+ */
+async function pasteFromClipboard() {
+    try {
+        const text = await navigator.clipboard.readText();
+        const data = JSON.parse(text);
+        loadFromJSON(data);
+    } catch (err) {
+        updateStatus(`❌ Paste failed: ${err.message}. Copy JSON from the scraper first.`, 'error');
+    }
+}
+
+/**
+ * Load scraped JSON data into the Sankey diagram.
+ * Accepts the format produced by the Tampermonkey scraper.
+ */
+function loadFromJSON(data) {
+    if (!data.nodes || !data.links) {
+        updateStatus('❌ Invalid format: expected { nodes: [...], links: [...] }', 'error');
+        return;
+    }
+
+    const mdsoRef = data.mdsoRef || 'Imported Data';
+    document.getElementById('mdso-ref').value = mdsoRef;
+
+    // Update data source indicator
+    const sourceEl = document.getElementById('data-source');
+    if (data.scrapedAt) {
+        sourceEl.textContent = `Data: Scraped ${new Date(data.scrapedAt).toLocaleString()}`;
+    } else {
+        sourceEl.textContent = 'Data: Imported JSON';
+    }
+
+    renderSankey(data, mdsoRef);
+
+    const nodeCount = data.nodes.length;
+    const linkCount = data.links.length;
+    const prCount = data.nodes.filter(n => n.type === 'PR').length;
+    const storyCount = data.nodes.filter(n => n.type === 'Story' || n.layer === 4).length;
+
+    updateStatus(
+        `✅ ${mdsoRef} — ${nodeCount} nodes, ${linkCount} links | ${prCount} PRs, ${storyCount} Stories (imported)`,
+        'success'
+    );
+}
