@@ -1,139 +1,127 @@
 # MDSO Traceability Sankey Diagram
 
-Visual traceability of change from code PRs all the way up to strategic Objectives, rendered as an interactive Sankey diagram.
-
-## Flow (left → right)
+Interactive Sankey visualization showing the full change traceability chain from code to strategy:
 
 ```
 Objectives → Initiatives → MDSO Projects → Epics/Features → Stories → PRs
-(Strategy)   (JIRA)        (JIRA)          (JIRA + Aha!)    (JIRA)    (GitHub)
 ```
+
+Uses **Playwright** to scrape your JIRA Cloud instance using your browser session — no API tokens required.
 
 ## Quick Start
 
 ```bash
-# Open directly in your browser (no server needed)
-open index.html
+# 1. Install dependencies
+npm install
+npm run setup   # installs Chromium for Playwright
 
-# Or serve locally for development
-npx http-server . -p 8080
-# Then visit http://localhost:8080
+# 2. Edit scrape.js and set your JIRA URL
+#    (or set JIRA_BASE_URL env variable)
+
+# 3. First run — login manually in the browser
+npm run login -- MDSO-25672
+
+# 4. Subsequent runs — headless, uses saved session
+npm run scrape -- MDSO-25672
+
+# 5. View the diagram
+npm run open
+#    Then click "Import JSON" and select the file from output/
 ```
 
-Enter an MDSO project reference in the input field and click **Load Traceability**.
+## How It Works
 
-### Sample Data Available
+1. **Playwright** launches a real Chromium browser with a persistent session
+2. First time: you log in manually (session is saved for future runs)
+3. The script calls JIRA's REST API from within the browser context (authenticated via cookies)
+4. It recursively crawls issue links, parent/child relationships, and GitHub PR references
+5. Outputs a JSON file that the Sankey diagram app consumes
 
-| MDSO Ref    | Description                |
-|-------------|----------------------------|
-| MDSO-1001   | Service Mesh Migration     |
-| MDSO-2002   | Pipeline as Code           |
+No API tokens. No browser extension restrictions. Just your normal JIRA login.
 
-## Architecture
-
-```
-index.html  — UI shell with Plotly.js CDN
-data.js     — Data model, sample data, and API integration stubs
-sankey.js   — Rendering logic and interaction handlers
-```
-
-## Connecting to Real APIs
-
-Edit `data.js` and uncomment the `fetchFromAPIs()` function. You'll need:
-
-### 1. JIRA REST API (Epics, Stories, MDSO Projects, Initiatives)
-
-```javascript
-// Base: https://your-org.atlassian.net/rest/api/3
-// Auth: Basic auth with API token or OAuth 2.0
-// Key endpoints:
-//   GET /issue/{MDSO-REF}?expand=issuelinks  — get the MDSO project + links
-//   GET /search?jql=parent={EPIC-KEY}        — get stories under an epic
-//   GET /issue/{KEY}/remotelink               — get linked PRs
-```
-
-**Link traversal strategy:**
-- From MDSO project, follow `issuelinks` with type "is part of" upward → Initiatives
-- From Initiatives, follow links upward → Objectives (or use custom fields)
-- From MDSO project, follow links downward → Epics
-- From Epics, query child issues → Stories
-
-### 2. Aha! REST API (Features)
-
-```javascript
-// Base: https://your-org.aha.io/api/v1
-// Auth: Bearer token
-// Key endpoints:
-//   GET /features?q={search}                  — find features by integration field
-//   GET /features/{id}/requirements           — get linked requirements/stories
-```
-
-**Integration approach:**
-- Use Aha!'s JIRA integration field to correlate Features with JIRA Epics
-- Or query by custom field that holds the MDSO project reference
-
-### 3. GitHub REST/GraphQL API (PRs)
-
-```javascript
-// REST: https://api.github.com
-// Auth: Bearer token (fine-grained PAT)
-// Key endpoints:
-//   GET /search/issues?q=repo:{owner}/{repo}+is:pr+{STORY-KEY}
-//   — searches PR titles/bodies for JIRA story keys
-//
-// GraphQL alternative for bulk queries:
-//   query { search(query: "repo:org/repo is:pr STORY-301", type: ISSUE) { ... } }
-```
-
-**PR-to-Story linking approaches:**
-1. **Commit message convention**: PRs reference story keys in title/description (e.g., `[STORY-301]`)
-2. **JIRA Development panel**: Use JIRA's dev info API if your repos are connected
-3. **GitHub-JIRA app**: Query remote links on JIRA issues
-
-### Environment Variables (suggested)
+## CLI Usage
 
 ```bash
-export JIRA_BASE_URL=https://your-org.atlassian.net
-export JIRA_API_TOKEN=your-token
-export AHA_API_TOKEN=your-token
-export GITHUB_TOKEN=ghp_your-token
+node scrape.js <MDSO-KEY> [options]
+
+Options:
+  --login    Force re-login (clears saved session)
+  --headed   Show the browser window (useful for debugging)
+
+Examples:
+  node scrape.js MDSO-25672              # headless scrape
+  node scrape.js MDSO-25672 --headed     # watch it work
+  node scrape.js MDSO-25672 --login      # re-login first
+
+Environment variables:
+  JIRA_BASE_URL   Your JIRA Cloud URL (default: https://your-org.atlassian.net)
 ```
 
-For a browser-only solution, consider a lightweight proxy/BFF that handles auth and CORS:
+## Output
 
-```
-Browser → Your BFF (Node/Python) → JIRA API
-                                  → Aha! API
-                                  → GitHub API
-```
+Scraped data is saved to `output/traceability-MDSO-XXXXX-YYYY-MM-DD.json`.
 
-## Customization
+Load it into the Sankey diagram:
+- Open `index.html` in your browser
+- Click **Import JSON** → select the output file
+- Or click **Paste JSON** if you copied it
 
-### Adding new MDSO project sample data
+## Configuration
 
-Add entries to the `SAMPLE_DATA` object in `data.js`:
+Edit the `CONFIG` object at the top of `scrape.js`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `jiraBaseUrl` | env or hardcoded | Your JIRA Cloud instance URL |
+| `maxDepth` | 6 | How many levels deep to crawl |
+| `requestDelay` | 400ms | Delay between API calls (rate limiting) |
+| `concurrency` | 2 | Parallel requests |
+| `headless` | true | Run without showing browser |
+| `layerMapping` | see code | Maps issue type names to hierarchy layers |
+
+### Custom Issue Types
+
+If your JIRA uses custom issue type names, update `layerMapping`:
 
 ```javascript
-SAMPLE_DATA['MDSO-3003'] = {
-    nodes: [
-        { id: 'obj-x', label: 'OBJ: ...', layer: LAYERS.OBJECTIVE, type: 'Objective', source: 'Strategy' },
-        // ... more nodes
-    ],
-    links: [
-        { source: 'obj-x', target: 'init-x', value: 3 },
-        // ... more links
-    ]
-};
+layerMapping: {
+    'Strategic Objective': 0,  // your custom name
+    'Initiative': 1,
+    'MDSO Project': 2,
+    'Epic': 3,
+    'Feature': 3,
+    'Story': 4,
+    'Task': 4,
+    'Bug': 4,
+}
 ```
 
-### Adjusting colors
+## Project Structure
 
-Edit `LAYER_COLORS` and `LINK_COLORS` in `data.js`.
+```
+scrape.js        — Playwright CLI scraper
+index.html       — Sankey diagram UI
+sankey.js        — Diagram rendering (Plotly.js)
+data.js          — Sample data + data model reference
+package.json     — Dependencies and scripts
+.auth-session/   — Saved browser session (gitignored)
+output/          — Scraped JSON files (gitignored)
+```
 
-### Changing diagram orientation
+## Troubleshooting
 
-In `sankey.js`, change `orientation: 'h'` to `orientation: 'v'` for vertical flow.
+**"Login required" every time:**
+- Run with `--headed` to see what's happening
+- Your org may use SSO that requires periodic re-auth
 
-## Browser Support
+**Rate limited (429 errors):**
+- Increase `requestDelay` in CONFIG
+- The script auto-retries after 3s on 429
 
-Works in any modern browser (Chrome, Firefox, Safari, Edge). Uses Plotly.js 2.32 from CDN.
+**Missing PRs:**
+- PRs are fetched from JIRA's dev panel (requires GitHub-JIRA integration)
+- If your repos aren't connected to JIRA, PRs won't appear
+
+**Wrong hierarchy:**
+- Adjust `layerMapping` to match your JIRA issue types
+- Run with `--headed` and check the console for issue types discovered

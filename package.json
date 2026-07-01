@@ -1,0 +1,19 @@
+{
+  "name": "traceability-sankey",
+  "version": "1.0.0",
+  "description": "MDSO traceability Sankey diagram — scrapes JIRA Cloud via Playwright",
+  "main": "scrape.js",
+  "scripts": {
+    "setup": "npx playwright install chromium",
+    "scrape": "node scrape.js",
+    "login": "node scrape.js --login --headed",
+    "open": "open index.html"
+  },
+  "dependencies": {
+    "playwright": "1.52.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/llira-mdsol/traceability-sankey"
+  }
+}
