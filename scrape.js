@@ -14,7 +14,7 @@
  * This avoids page crashes from JIRA's heavy frontend.
  */
 
-const { chromium, request } = require('playwright');
+const { firefox, request } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
@@ -147,13 +147,8 @@ async function getAuthCookies() {
     console.log('🔐 Login required. Opening browser...');
     console.log('   Log in to JIRA manually. The browser will close automatically.\n');
 
-    const browser = await chromium.launch({
+    const browser = await firefox.launch({
         headless: false, // Always show browser for login
-        args: [
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--no-sandbox',
-        ],
     });
 
     const context = await browser.newContext({
@@ -162,17 +157,6 @@ async function getAuthCookies() {
     });
 
     const page = await context.newPage();
-
-    // Block heavy resources to prevent crashes during login
-    await page.route('**/*', (route) => {
-        const type = route.request().resourceType();
-        // Only block images and media — allow scripts/CSS/fonts for SSO to work
-        if (['image', 'media'].includes(type)) {
-            route.abort();
-        } else {
-            route.continue();
-        }
-    });
 
     // Navigate to JIRA login
     await page.goto(CONFIG.jiraBaseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
