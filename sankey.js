@@ -93,8 +93,17 @@ function renderSankey(traceData, mdsoRef) {
         return;
     }
 
+    // Remap layers to be contiguous (d3-sankey crashes on gaps in layer indices)
+    const presentLayers = [...new Set(filteredNodes.map(n => n.layer))].sort((a, b) => a - b);
+    const layerRemap = new Map(presentLayers.map((layer, idx) => [layer, idx]));
+    filteredNodes.forEach(n => {
+        n.originalLayer = n.layer;
+        n.layer = layerRemap.get(n.layer);
+    });
+
     console.log('[Sankey] Rendering:', filteredNodes.length, 'nodes,', sankeyLinks.length, 'links');
     console.log('[Sankey] Layer dist:', filteredNodes.reduce((acc, n) => { acc[n.layer] = (acc[n.layer] || 0) + 1; return acc; }, {}));
+    console.log('[Sankey] Layer remap:', Object.fromEntries(layerRemap));
 
     // Configure sankey layout
     const numLayers = Object.keys(LAYERS).length;
@@ -161,7 +170,7 @@ function renderSankey(traceData, mdsoRef) {
     // Layer headers
     const layerPositions = {};
     graph.nodes.forEach(node => {
-        const layer = node.layer;
+        const layer = node.originalLayer !== undefined ? node.originalLayer : node.layer;
         if (!layerPositions[layer]) {
             layerPositions[layer] = { minX: Infinity, maxX: -Infinity };
         }
@@ -175,8 +184,8 @@ function renderSankey(traceData, mdsoRef) {
             .attr('class', 'layer-header')
             .attr('x', centerX)
             .attr('y', -15)
-            .attr('fill', LAYER_COLORS[layer])
-            .text(LAYER_NAMES[layer]);
+            .attr('fill', LAYER_COLORS[layer] || '#546e7a')
+            .text(LAYER_NAMES[layer] || `Layer ${layer}`);
     }
 
     // Draw links
@@ -187,7 +196,7 @@ function renderSankey(traceData, mdsoRef) {
         .data(graph.links)
         .join('path')
         .attr('d', d3.sankeyLinkHorizontal())
-        .attr('stroke', d => LAYER_COLORS[d.source.layer])
+        .attr('stroke', d => LAYER_COLORS[d.source.originalLayer !== undefined ? d.source.originalLayer : d.source.layer])
         .attr('stroke-width', d => Math.max(2, d.width))
         .style('mix-blend-mode', 'screen')
         .on('mouseover', function(event, d) {
@@ -225,7 +234,7 @@ function renderSankey(traceData, mdsoRef) {
     node.append('rect')
         .attr('width', d => d.x1 - d.x0)
         .attr('height', d => Math.max(4, d.y1 - d.y0))
-        .attr('fill', d => LAYER_COLORS[d.layer])
+        .attr('fill', d => LAYER_COLORS[d.originalLayer !== undefined ? d.originalLayer : d.layer])
         .attr('stroke', 'rgba(255,255,255,0.2)')
         .attr('stroke-width', 0.5)
         .attr('rx', 3)
@@ -237,7 +246,7 @@ function renderSankey(traceData, mdsoRef) {
                 <div class="tt-title">${d.label}</div>
                 <div class="tt-row">Type: ${d.type}</div>
                 <div class="tt-row">Source: ${d.source}</div>
-                <div class="tt-row">Layer: ${LAYER_NAMES[d.layer]}</div>
+                <div class="tt-row">Layer: ${LAYER_NAMES[d.originalLayer !== undefined ? d.originalLayer : d.layer] || 'Unknown'}</div>
                 ${d.status ? `<div class="tt-row">Status: ${d.status}</div>` : ''}
                 ${d.key ? `<div class="tt-row">Key: ${d.key}</div>` : ''}
             `);
@@ -262,7 +271,7 @@ function renderSankey(traceData, mdsoRef) {
         })
         .each(function(d) {
             // If node is on the right side, put label on the left
-            if (d.layer >= numLayers - 2) {
+            if (d.layer >= presentLayers.length - 2) {
                 d3.select(this)
                     .attr('x', -6)
                     .attr('text-anchor', 'end');
