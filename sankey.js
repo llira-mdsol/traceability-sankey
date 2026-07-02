@@ -171,25 +171,31 @@ function renderSankey(traceData, mdsoRef) {
     const g = zoomGroup.append('g')
         .attr('transform', `translate(${margin.left},${margin.top})`);
 
-    // Layer headers
-    const layerPositions = {};
+    // Layer headers — derive from actual node types in each column
+    const columnInfo = {};
     graph.nodes.forEach(node => {
-        const layer = node.originalLayer !== undefined ? node.originalLayer : node.layer;
-        if (!layerPositions[layer]) {
-            layerPositions[layer] = { minX: Infinity, maxX: -Infinity };
+        const col = node.x0; // x position groups nodes into columns
+        const colKey = Math.round(col);
+        if (!columnInfo[colKey]) {
+            columnInfo[colKey] = { x0: node.x0, x1: node.x1, types: new Set() };
         }
-        layerPositions[layer].minX = Math.min(layerPositions[layer].minX, node.x0);
-        layerPositions[layer].maxX = Math.max(layerPositions[layer].maxX, node.x1);
+        columnInfo[colKey].types.add(node.type);
+        columnInfo[colKey].x0 = Math.min(columnInfo[colKey].x0, node.x0);
+        columnInfo[colKey].x1 = Math.max(columnInfo[colKey].x1, node.x1);
     });
 
-    for (const [layer, pos] of Object.entries(layerPositions)) {
-        const centerX = (pos.minX + pos.maxX) / 2;
+    for (const [, info] of Object.entries(columnInfo)) {
+        const centerX = (info.x0 + info.x1) / 2;
+        const typeLabel = [...info.types].join(' / ');
+        // Pick color from first type
+        const sampleType = [...info.types][0];
+        const color = getNodeColor({ type: sampleType });
         g.append('text')
             .attr('class', 'layer-header')
             .attr('x', centerX)
             .attr('y', -15)
-            .attr('fill', LAYER_COLORS[layer] || '#546e7a')
-            .text(LAYER_NAMES[layer] || `Layer ${layer}`);
+            .attr('fill', color)
+            .text(typeLabel);
     }
 
     // Draw links
@@ -200,7 +206,7 @@ function renderSankey(traceData, mdsoRef) {
         .data(graph.links)
         .join('path')
         .attr('d', d3.sankeyLinkHorizontal())
-        .attr('stroke', d => LAYER_COLORS[d.source.originalLayer !== undefined ? d.source.originalLayer : d.source.layer])
+        .attr('stroke', d => getNodeColor(d.source))
         .attr('stroke-width', d => Math.max(2, d.width))
         .style('mix-blend-mode', 'screen')
         .on('mouseover', function(event, d) {
@@ -238,7 +244,7 @@ function renderSankey(traceData, mdsoRef) {
     node.append('rect')
         .attr('width', d => d.x1 - d.x0)
         .attr('height', d => Math.max(4, d.y1 - d.y0))
-        .attr('fill', d => LAYER_COLORS[d.originalLayer !== undefined ? d.originalLayer : d.layer])
+        .attr('fill', d => getNodeColor(d))
         .attr('stroke', 'rgba(255,255,255,0.2)')
         .attr('stroke-width', 0.5)
         .attr('rx', 3)
@@ -250,7 +256,7 @@ function renderSankey(traceData, mdsoRef) {
                 <div class="tt-title">${d.label}</div>
                 <div class="tt-row">Type: ${d.type}</div>
                 <div class="tt-row">Source: ${d.source}</div>
-                <div class="tt-row">Layer: ${LAYER_NAMES[d.originalLayer !== undefined ? d.originalLayer : d.layer] || 'Unknown'}</div>
+                <div class="tt-row">Layer: ${d.type}</div>
                 ${d.status ? `<div class="tt-row">Status: ${d.status}</div>` : ''}
                 ${d.key ? `<div class="tt-row">Key: ${d.key}</div>` : ''}
             `);
@@ -287,8 +293,25 @@ function renderSankey(traceData, mdsoRef) {
 }
 
 /**
- * Fit the diagram content to the viewport
+ * Get color for a node based on its type (works regardless of layer number)
  */
+function getNodeColor(node) {
+    const type = (node.type || '').toLowerCase();
+    if (type.includes('objective')) return '#e57373';
+    if (type.includes('initiative')) return '#ffb74d';
+    if (type === 'project' || type.includes('mdso')) return '#fff176';
+    if (type.includes('epic') || type.includes('feature')) return '#81c784';
+    if (type.includes('story')) return '#4fc3f7';
+    if (type.includes('task')) return '#4dd0e1';
+    if (type.includes('bug')) return '#ff8a65';
+    if (type.includes('risk') || type.includes('problem') || type.includes('request') || type.includes('access')) return '#a1887f';
+    if (type === 'pr' || type.includes('pull')) return '#ce93d8';
+    if (type.includes('release')) return '#dce775';
+    if (type.includes('deploy')) return '#7986cb';
+    return '#90a4ae'; // fallback gray
+}
+
+
 function fitToContent(svg, zoomGroup, width, height, margin) {
     const bounds = zoomGroup.node().getBBox();
     if (bounds.width === 0 || bounds.height === 0) return;
