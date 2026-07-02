@@ -111,11 +111,14 @@ function renderSankey(traceData, mdsoRef) {
     const maxNodesInLayer = Math.max(...Object.values(
         filteredNodes.reduce((acc, n) => { acc[n.layer] = (acc[n.layer] || 0) + 1; return acc; }, {})
     ));
-    const adaptivePadding = maxNodesInLayer > 50 ? 2 : maxNodesInLayer > 20 ? 6 : 14;
-    // For large datasets, expand the virtual height
-    const virtualHeight = Math.max(innerHeight, maxNodesInLayer * (adaptivePadding + 4));
+    const adaptivePadding = maxNodesInLayer > 100 ? 1 : maxNodesInLayer > 50 ? 2 : maxNodesInLayer > 20 ? 6 : 14;
+    // For large datasets, use proportional virtual dimensions
+    // Make width much wider than height to spread columns apart
+    const numColumns = presentLayers.length;
+    const virtualHeight = Math.max(innerHeight, maxNodesInLayer * (adaptivePadding + 3));
+    const virtualWidth = Math.max(innerWidth, numColumns * 300);
 
-    console.log('[Sankey] Max nodes in layer:', maxNodesInLayer, '| Padding:', adaptivePadding, '| Virtual height:', virtualHeight);
+    console.log('[Sankey] Max nodes in layer:', maxNodesInLayer, '| Padding:', adaptivePadding, '| Virtual:', virtualWidth, 'x', virtualHeight);
 
     const sankey = d3.sankey()
         .nodeId(d => d.id)
@@ -125,27 +128,18 @@ function renderSankey(traceData, mdsoRef) {
         .nodeAlign((node, n) => {
             // Force nodes into their layer column
             const layer = node.layer !== undefined ? node.layer : 2;
-            if (!window._alignDebugCount) {
-                window._alignDebugCount = 0;
-            }
-            if (window._alignDebugCount < 5) {
-                console.log('[Sankey] nodeAlign - node.layer:', layer, 'node.id:', node.id, 'node.type:', node.type);
-                window._alignDebugCount++;
-            }
             return layer;
         })
-        .extent([[0, 0], [innerWidth, virtualHeight]]);
+        .extent([[0, 0], [virtualWidth, virtualHeight]]);
 
     // Compute layout
     let graph;
     try {
-        console.log('[Sankey] Computing layout...');
-        window._alignDebugCount = 0;
         graph = sankey({
             nodes: filteredNodes.map(d => ({ ...d })),
             links: sankeyLinks.map(d => ({ ...d }))
         });
-        console.log('[Sankey] Layout computed! Nodes with x/y:', graph.nodes.slice(0, 3).map(n => ({id: n.id, x0: n.x0, y0: n.y0, layer: n.layer})));
+        console.log('[Sankey] Layout computed:', graph.nodes.length, 'nodes positioned');
     } catch (err) {
         console.error('Sankey layout error:', err);
         console.log('Nodes:', filteredNodes.length, 'Links:', sankeyLinks.length);
@@ -299,16 +293,13 @@ function fitToContent(svg, zoomGroup, width, height, margin) {
     const bounds = zoomGroup.node().getBBox();
     if (bounds.width === 0 || bounds.height === 0) return;
 
-    const fullWidth = bounds.width + 60;
-    const fullHeight = bounds.height + 60;
-    const scale = Math.min(
-        width / fullWidth,
-        height / fullHeight,
-        1.2 // don't over-zoom
-    );
+    // Fit to width primarily, allow vertical panning
+    const scaleX = (width - 40) / bounds.width;
+    const scaleY = (height - 40) / bounds.height;
+    const scale = Math.min(scaleX, scaleY, 2.0);
 
     const tx = (width - bounds.width * scale) / 2 - bounds.x * scale;
-    const ty = (height - bounds.height * scale) / 2 - bounds.y * scale;
+    const ty = 20 - bounds.y * scale; // Align to top with small margin
 
     const transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
     svg.call(zoomBehavior.transform, transform);
