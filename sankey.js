@@ -39,24 +39,21 @@ function renderSankey(traceData, mdsoRef) {
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
 
-    // Build node index map
-    const nodeMap = new Map();
-    traceData.nodes.forEach((node, idx) => {
-        nodeMap.set(node.id, idx);
-    });
+    // Build node index map (for validation)
+    const nodeIdSet = new Set(traceData.nodes.map(n => n.id));
 
-    // Build d3-sankey compatible data
+    // Build d3-sankey compatible data — use string IDs for source/target
     const sankeyNodes = traceData.nodes.map(n => ({
         ...n,
         name: n.label
     }));
 
     const sankeyLinks = traceData.links
-        .filter(l => nodeMap.has(l.source) && nodeMap.has(l.target))
+        .filter(l => nodeIdSet.has(l.source) && nodeIdSet.has(l.target) && l.source !== l.target)
         .map(l => ({
-            source: nodeMap.get(l.source),
-            target: nodeMap.get(l.target),
-            value: l.value || 1
+            source: l.source,
+            target: l.target,
+            value: Math.max(1, l.value || 1)
         }));
 
     // Configure sankey layout
@@ -68,15 +65,29 @@ function renderSankey(traceData, mdsoRef) {
         .nodeSort(null)
         .nodeAlign((node) => {
             // Force nodes into their layer column
-            return node.layer;
+            return node.layer !== undefined ? node.layer : 4;
         })
         .extent([[0, 0], [innerWidth, innerHeight]]);
 
     // Compute layout
-    const graph = sankey({
-        nodes: sankeyNodes.map(d => ({ ...d })),
-        links: sankeyLinks.map(d => ({ ...d }))
-    });
+    let graph;
+    try {
+        graph = sankey({
+            nodes: sankeyNodes.map(d => ({ ...d })),
+            links: sankeyLinks.map(d => ({ ...d }))
+        });
+    } catch (err) {
+        console.error('Sankey layout error:', err);
+        console.log('Nodes:', sankeyNodes.length, 'Links:', sankeyLinks.length);
+        // Log orphan links for debugging
+        const ids = new Set(sankeyNodes.map(n => n.id));
+        const badLinks = traceData.links.filter(l => !ids.has(l.source) || !ids.has(l.target));
+        if (badLinks.length) {
+            console.warn('Links referencing missing nodes:', badLinks);
+        }
+        updateStatus(`❌ Layout error: ${err.message}. Check console for details.`, 'error');
+        return;
+    }
 
     // Create zoom group
     const zoomGroup = svg.append('g').attr('class', 'zoom-group');
@@ -339,6 +350,23 @@ function loadFromJSON(data) {
         updateStatus('❌ Invalid format: expected { nodes: [...], links: [...] }', 'error');
         return;
     }
+
+    // Ensure all nodes have a valid layer (handle legacy 6-layer scraped data)
+    data.nodes.forEach(node => {
+        if (node.layer === undefined || node.layer === null) {
+            // Guess layer from type if missing
+            const type = (node.type || '').toLowerCase();
+            if (type.includes('objective')) node.layer = 0;
+            else if (type.includes('initiative')) node.layer = 1;
+            else if (type.includes('mdso') && type.includes('project')) node.layer = 2;
+            else if (type.includes('epic') || type.includes('feature')) node.layer = 3;
+            else if (type.includes('story') || type.includes('task') || type.includes('bug')) node.layer = 4;
+            else if (type === 'pr' || type.includes('pull')) node.layer = 5;
+            else if (type.includes('release')) node.layer = 6;
+            else if (type.includes('deploy')) node.layer = 7;
+            else node.layer = 4;
+        }
+    });
 
     const mdsoRef = data.mdsoRef || 'Imported Data';
     document.getElementById('mdso-ref').value = mdsoRef;
