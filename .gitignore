@@ -3,4 +3,5 @@ node_modules/
 .auth-session/
 .auth-cookies.json
 output/
+input/
 screenshot.png
