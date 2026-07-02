@@ -53,6 +53,10 @@ const CONFIG = {
 
     // REST API version ('2' for Server/DC, '3' for Cloud)
     apiVersion: '2',
+
+    // Custom field ID for "Epic Link" / Objective on MDSO projects
+    // Run with --discover-fields to find the correct ID for your instance
+    epicLinkFields: ['customfield_10008', 'customfield_10006', 'customfield_10014'],
 };
 
 // ===== STATE =====
@@ -66,14 +70,16 @@ const args = process.argv.slice(2);
 const issueKey = args.find(a => !a.startsWith('--'));
 const forceLogin = args.includes('--login');
 const showBrowser = args.includes('--headed');
+const discoverFields = args.includes('--discover-fields');
 
 if (!issueKey) {
-    console.error('Usage: node scrape.js <MDSO-KEY> [--login] [--headed]');
+    console.error('Usage: node scrape.js <MDSO-KEY> [--login] [--headed] [--discover-fields]');
     console.error('  e.g. node scrape.js MDSO-25672');
     console.error('');
     console.error('Options:');
-    console.error('  --login   Force re-login (clear saved session)');
-    console.error('  --headed  Show the browser window during login');
+    console.error('  --login            Force re-login (clear saved session)');
+    console.error('  --headed           Show the browser window during login');
+    console.error('  --discover-fields  List all fields on the issue (find Epic Link field ID)');
     process.exit(1);
 }
 
@@ -117,6 +123,71 @@ async function main() {
     }
     console.log(`   ✅ Authenticated as: ${myself.displayName || myself.name}\n`);
 
+    // --discover-fields mode: dump all fields on the issue and exit
+    if (discoverFields) {
+        console.log(`   🔍 Discovering fields on ${issueKey.toUpperCase()}...\n`);
+
+        // Fetch the issue with ALL fields
+        const fullIssue = await apiGet(apiContext, `/rest/api/${CONFIG.apiVersion}/issue/${issueKey.toUpperCase()}`);
+        if (!fullIssue || fullIssue.error) {
+            console.error(`   ❌ Could not fetch ${issueKey}: ${fullIssue?.error || 'unknown error'}`);
+            await apiContext.dispose();
+            process.exit(1);
+        }
+
+        // Also fetch field definitions
+        const fieldDefs = await apiGet(apiContext, `/rest/api/${CONFIG.apiVersion}/field`);
+        const fieldNameMap = new Map();
+        if (Array.isArray(fieldDefs)) {
+            fieldDefs.forEach(f => fieldNameMap.set(f.id, f.name));
+        }
+
+        console.log(`   Issue: ${fullIssue.key} — ${fullIssue.fields?.summary}`);
+        console.log(`   Type: ${fullIssue.fields?.issuetype?.name}`);
+        console.log(`   Status: ${fullIssue.fields?.status?.name}\n`);
+        console.log('   ─── All Fields ───\n');
+
+        const fields = fullIssue.fields || {};
+        const entries = Object.entries(fields)
+            .filter(([, v]) => v !== null && v !== undefined && v !== '')
+            .sort(([a], [b]) => a.localeCompare(b));
+
+        for (const [key, value] of entries) {
+            const fieldName = fieldNameMap.get(key) || '';
+            const displayName = fieldName ? `${key} (${fieldName})` : key;
+
+            let displayValue;
+            if (typeof value === 'string') {
+                displayValue = value.length > 80 ? value.substring(0, 80) + '...' : value;
+            } else if (typeof value === 'number' || typeof value === 'boolean') {
+                displayValue = String(value);
+            } else if (value?.name) {
+                displayValue = value.name;
+            } else if (value?.value) {
+                displayValue = value.value;
+            } else if (value?.displayName) {
+                displayValue = value.displayName;
+            } else if (Array.isArray(value)) {
+                displayValue = `[${value.length} items]` + (value.length > 0 && value[0]?.name ? ` — ${value.slice(0, 3).map(v => v.name || v.key || v).join(', ')}` : '');
+            } else {
+                displayValue = JSON.stringify(value).substring(0, 80);
+            }
+
+            // Highlight likely "Epic Link" or "Objective" fields
+            const highlight = (fieldName.toLowerCase().includes('epic') || fieldName.toLowerCase().includes('objective') || fieldName.toLowerCase().includes('initiative'))
+                ? ' ⭐' : '';
+
+            console.log(`   ${displayName}${highlight}`);
+            console.log(`     → ${displayValue}\n`);
+        }
+
+        console.log('\n   ⭐ = Likely Epic Link / Objective field');
+        console.log('   Update CONFIG.epicLinkField in scrape.js with the correct field ID.\n');
+
+        await apiContext.dispose();
+        return;
+    }
+
     // Crawl the issue hierarchy
     // Phase 1: Fetch the starting MDSO project to get:
     //   - Directly linked epics (only these will be included)
@@ -133,9 +204,14 @@ async function main() {
     visited.set(issueKey.toUpperCase(), startNode);
 
     // Extract Objective from Epic Link custom field
-    const epicLinkValue = startIssue.fields?.customfield_10008
-        || startIssue.fields?.customfield_10006
-        || startIssue.fields?.customfield_10014;
+    let epicLinkValue = null;
+    for (const fieldId of CONFIG.epicLinkFields) {
+        if (startIssue.fields?.[fieldId]) {
+            epicLinkValue = startIssue.fields[fieldId];
+            console.log(`   Found Epic Link in field: ${fieldId}`);
+            break;
+        }
+    }
 
     if (epicLinkValue) {
         const objLabel = typeof epicLinkValue === 'string' ? epicLinkValue : (epicLinkValue.name || epicLinkValue.value || JSON.stringify(epicLinkValue));
@@ -317,8 +393,8 @@ async function apiGet(apiContext, endpoint) {
 }
 
 async function fetchIssue(apiContext, key) {
-    const data = await apiGet(apiContext, `/rest/api/${CONFIG.apiVersion}/issue/${key}?fields=summary,issuetype,status,issuelinks,parent,subtasks,project,customfield_10008,customfield_10014,customfield_10006`);
-    // customfield_10008 = Epic Link (common), customfield_10014 = Epic Name, customfield_10006 = Epic Link (alt)
+    const epicFields = CONFIG.epicLinkFields.join(',');
+    const data = await apiGet(apiContext, `/rest/api/${CONFIG.apiVersion}/issue/${key}?fields=summary,issuetype,status,issuelinks,parent,subtasks,project,${epicFields}`);
     if (data?.error) {
         if (data.error !== 404) {
             console.warn(`   ⚠️  Failed to fetch ${key}: ${data.error} ${data.statusText || ''}`);
