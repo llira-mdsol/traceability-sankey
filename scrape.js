@@ -56,7 +56,7 @@ const CONFIG = {
 
     // Custom field ID for "Epic Link" / Objective on MDSO projects
     // Run with --discover-fields to find the correct ID for your instance
-    epicLinkFields: ['customfield_10008', 'customfield_10006', 'customfield_10014'],
+    epicLinkFields: ['customfield_10404'],
 };
 
 // ===== STATE =====
