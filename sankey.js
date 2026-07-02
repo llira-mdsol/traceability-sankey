@@ -87,9 +87,6 @@ function renderSankey(traceData, mdsoRef) {
     if (filteredNodes.length === 0 || sankeyLinks.length === 0) {
         updateStatus(`⚠️ No valid forward-flowing links found. Nodes: ${sankeyNodes.length}, Filtered links: ${sankeyLinks.length}`, 'error');
         console.warn('All links filtered. This may mean links go between same-layer or backward nodes.');
-        console.log('Layer distribution:', Object.entries(
-            traceData.nodes.reduce((acc, n) => { acc[n.layer] = (acc[n.layer] || 0) + 1; return acc; }, {})
-        ));
         return;
     }
 
@@ -100,6 +97,29 @@ function renderSankey(traceData, mdsoRef) {
         n.originalLayer = n.layer;
         n.layer = layerRemap.get(n.layer);
     });
+
+    // Add ghost anchor nodes to force d3-sankey to respect column placement.
+    // d3-sankey ignores nodeAlign for leaf nodes (pushes them to max depth).
+    // Ghost nodes with tiny links through every column prevent this.
+    const numRemappedLayers = presentLayers.length;
+    for (let i = 0; i < numRemappedLayers; i++) {
+        filteredNodes.push({
+            id: `__ghost_${i}`,
+            label: '',
+            layer: i,
+            originalLayer: presentLayers[i],
+            type: '__ghost',
+            source: '',
+            _ghost: true
+        });
+    }
+    for (let i = 0; i < numRemappedLayers - 1; i++) {
+        sankeyLinks.push({
+            source: `__ghost_${i}`,
+            target: `__ghost_${i + 1}`,
+            value: 0.001
+        });
+    }
 
     console.log('[Sankey] Rendering:', filteredNodes.length, 'nodes,', sankeyLinks.length, 'links');
     console.log('[Sankey] Layer dist:', filteredNodes.reduce((acc, n) => { acc[n.layer] = (acc[n.layer] || 0) + 1; return acc; }, {}));
@@ -173,7 +193,7 @@ function renderSankey(traceData, mdsoRef) {
 
     // Layer headers — derive from actual node types in each column
     const columnInfo = {};
-    graph.nodes.forEach(node => {
+    graph.nodes.filter(n => !n._ghost).forEach(node => {
         const col = node.x0; // x position groups nodes into columns
         const colKey = Math.round(col);
         if (!columnInfo[colKey]) {
@@ -198,12 +218,12 @@ function renderSankey(traceData, mdsoRef) {
             .text(typeLabel);
     }
 
-    // Draw links
+    // Draw links (exclude ghost links)
     const link = g.append('g')
         .attr('fill', 'none')
         .attr('stroke-opacity', 0.35)
         .selectAll('path')
-        .data(graph.links)
+        .data(graph.links.filter(d => !d.source._ghost && !d.target._ghost))
         .join('path')
         .attr('d', d3.sankeyLinkHorizontal())
         .attr('stroke', d => getNodeColor(d.source))
@@ -222,10 +242,10 @@ function renderSankey(traceData, mdsoRef) {
             hideTooltip();
         });
 
-    // Draw nodes
+    // Draw nodes (exclude ghost nodes)
     const node = g.append('g')
         .selectAll('g')
-        .data(graph.nodes)
+        .data(graph.nodes.filter(d => !d._ghost))
         .join('g')
         .attr('transform', d => `translate(${d.x0},${d.y0})`)
         .call(d3.drag()
