@@ -125,9 +125,12 @@ function renderSankey(traceData, mdsoRef) {
         .nodeAlign((node, n) => {
             // Force nodes into their layer column
             const layer = node.layer !== undefined ? node.layer : 2;
-            if (!window._alignDebugDone) {
-                window._alignDebugDone = true;
-                console.log('[Sankey] nodeAlign sample - node.layer:', node.layer, 'node.id:', node.id, 'n:', n);
+            if (!window._alignDebugCount) {
+                window._alignDebugCount = 0;
+            }
+            if (window._alignDebugCount < 5) {
+                console.log('[Sankey] nodeAlign - node.layer:', layer, 'node.id:', node.id, 'node.type:', node.type);
+                window._alignDebugCount++;
             }
             return layer;
         })
@@ -136,10 +139,13 @@ function renderSankey(traceData, mdsoRef) {
     // Compute layout
     let graph;
     try {
+        console.log('[Sankey] Computing layout...');
+        window._alignDebugCount = 0;
         graph = sankey({
             nodes: filteredNodes.map(d => ({ ...d })),
             links: sankeyLinks.map(d => ({ ...d }))
         });
+        console.log('[Sankey] Layout computed! Nodes with x/y:', graph.nodes.slice(0, 3).map(n => ({id: n.id, x0: n.x0, y0: n.y0, layer: n.layer})));
     } catch (err) {
         console.error('Sankey layout error:', err);
         console.log('Nodes:', filteredNodes.length, 'Links:', sankeyLinks.length);
