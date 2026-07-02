@@ -33,6 +33,7 @@ const CONFIG = {
     requestDelay: 400,
 
     // Issue type → layer mapping
+    // Flow: Objectives(0) → Initiatives(1) → MDSO Projects(2) → Epics/Features(3) → Stories(4) → PRs(5) → Releases(6) → Deployments(7)
     layerMapping: {
         'Objective': 0,
         'Initiative': 1,
@@ -43,6 +44,11 @@ const CONFIG = {
         'Task': 4,
         'Sub-task': 4,
         'Bug': 4,
+        'Release': 6,
+        'MDSO Release': 6,
+        'Deployment': 7,
+        'Deploy': 7,
+        'IH Deploy': 7,
     },
 
     // REST API version ('2' for Server/DC, '3' for Cloud)
@@ -289,10 +295,12 @@ function getLayer(issueType) {
     const lower = normalized.toLowerCase();
     if (lower.includes('objective')) return 0;
     if (lower.includes('initiative')) return 1;
-    if (lower.includes('mdso') || lower.includes('project')) return 2;
+    if (lower.includes('mdso') && lower.includes('project')) return 2;
     if (lower.includes('epic') || lower.includes('feature')) return 3;
+    if (lower.includes('release')) return 6;
+    if (lower.includes('deploy')) return 7;
     if (lower.includes('pr') || lower.includes('pull')) return 5;
-    return 4;
+    return 4; // Default to Story layer
 }
 
 function processIssue(issue) {

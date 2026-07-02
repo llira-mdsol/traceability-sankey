@@ -1,13 +1,13 @@
 /**
  * Traceability Data Model & Sample Data
  * 
- * Hierarchy (bottom-up):
- *   PRs (Code Repo) → Stories (JIRA) → Epics (JIRA) / Features (Aha!) → MDSO Projects (JIRA) → Initiatives → Objectives
+ * Hierarchy (left to right in Sankey):
+ *   Objectives → Initiatives → MDSO Projects → Epics/Features → Stories → PRs → Releases (MDSO) → Deployments (IH)
  * 
  * Each node has:
  *   - id: unique identifier
  *   - label: display name
- *   - layer: which level in the hierarchy (0=Objective, 5=PR)
+ *   - layer: which level in the hierarchy (0=Objective, 7=PR)
  *   - type: node category
  *   - source: originating system (JIRA, Aha, GitHub, etc.)
  * 
@@ -21,30 +21,57 @@ const LAYERS = {
     MDSO_PROJECT: 2,
     EPIC_FEATURE: 3,
     STORY: 4,
-    PR: 5
+    PR: 5,
+    RELEASE: 6,        // MDSO release types
+    DEPLOYMENT: 7,     // IH deploy types
+};
+
+const LAYER_NAMES = {
+    [LAYERS.OBJECTIVE]: 'Objectives',
+    [LAYERS.INITIATIVE]: 'Initiatives',
+    [LAYERS.MDSO_PROJECT]: 'MDSO Projects',
+    [LAYERS.EPIC_FEATURE]: 'Epics / Features',
+    [LAYERS.STORY]: 'Stories',
+    [LAYERS.PR]: 'PRs',
+    [LAYERS.RELEASE]: 'Releases',
+    [LAYERS.DEPLOYMENT]: 'Deployments',
 };
 
 const LAYER_COLORS = {
-    [LAYERS.OBJECTIVE]: 'rgba(229, 115, 115, 0.8)',    // Red
-    [LAYERS.INITIATIVE]: 'rgba(255, 183, 77, 0.8)',     // Orange
-    [LAYERS.MDSO_PROJECT]: 'rgba(255, 241, 118, 0.8)', // Yellow
-    [LAYERS.EPIC_FEATURE]: 'rgba(129, 199, 132, 0.8)', // Green
-    [LAYERS.STORY]: 'rgba(79, 195, 247, 0.8)',          // Blue
-    [LAYERS.PR]: 'rgba(206, 147, 216, 0.8)'             // Purple
+    [LAYERS.OBJECTIVE]: '#e57373',      // Red
+    [LAYERS.INITIATIVE]: '#ffb74d',     // Orange
+    [LAYERS.MDSO_PROJECT]: '#fff176',   // Yellow
+    [LAYERS.EPIC_FEATURE]: '#81c784',   // Green
+    [LAYERS.STORY]: '#4fc3f7',          // Blue
+    [LAYERS.PR]: '#ce93d8',             // Purple
+    [LAYERS.RELEASE]: '#dce775',        // Lime
+    [LAYERS.DEPLOYMENT]: '#7986cb',     // Indigo
+};
+
+const LAYER_COLORS_RGBA = {
+    [LAYERS.OBJECTIVE]: 'rgba(229, 115, 115, 0.85)',
+    [LAYERS.INITIATIVE]: 'rgba(255, 183, 77, 0.85)',
+    [LAYERS.MDSO_PROJECT]: 'rgba(255, 241, 118, 0.85)',
+    [LAYERS.EPIC_FEATURE]: 'rgba(129, 199, 132, 0.85)',
+    [LAYERS.STORY]: 'rgba(79, 195, 247, 0.85)',
+    [LAYERS.PR]: 'rgba(206, 147, 216, 0.85)',
+    [LAYERS.RELEASE]: 'rgba(220, 231, 117, 0.85)',
+    [LAYERS.DEPLOYMENT]: 'rgba(121, 134, 203, 0.85)',
 };
 
 const LINK_COLORS = {
-    [LAYERS.OBJECTIVE]: 'rgba(229, 115, 115, 0.25)',
-    [LAYERS.INITIATIVE]: 'rgba(255, 183, 77, 0.25)',
-    [LAYERS.MDSO_PROJECT]: 'rgba(255, 241, 118, 0.25)',
-    [LAYERS.EPIC_FEATURE]: 'rgba(129, 199, 132, 0.25)',
-    [LAYERS.STORY]: 'rgba(79, 195, 247, 0.25)',
-    [LAYERS.PR]: 'rgba(206, 147, 216, 0.25)'
+    [LAYERS.OBJECTIVE]: 'rgba(229, 115, 115, 0.2)',
+    [LAYERS.INITIATIVE]: 'rgba(255, 183, 77, 0.2)',
+    [LAYERS.MDSO_PROJECT]: 'rgba(255, 241, 118, 0.2)',
+    [LAYERS.EPIC_FEATURE]: 'rgba(129, 199, 132, 0.2)',
+    [LAYERS.STORY]: 'rgba(79, 195, 247, 0.2)',
+    [LAYERS.PR]: 'rgba(206, 147, 216, 0.2)',
+    [LAYERS.RELEASE]: 'rgba(220, 231, 117, 0.2)',
+    [LAYERS.DEPLOYMENT]: 'rgba(121, 134, 203, 0.2)',
 };
 
 /**
  * Sample datasets keyed by MDSO project reference.
- * In production, this would be replaced by API calls to JIRA, Aha!, and your Git provider.
  */
 const SAMPLE_DATA = {
     'MDSO-1001': {
@@ -86,6 +113,17 @@ const SAMPLE_DATA = {
             { id: 'pr-408', label: 'PR #408: Circuit breaker middleware', layer: LAYERS.PR, type: 'PR', source: 'GitHub' },
             { id: 'pr-409', label: 'PR #409: Health check handler', layer: LAYERS.PR, type: 'PR', source: 'GitHub' },
             { id: 'pr-410', label: 'PR #410: Retry policy config', layer: LAYERS.PR, type: 'PR', source: 'GitHub' },
+
+            // Releases (Layer 6) — MDSO release types
+            { id: 'rel-100', label: 'REL: Mesh v1.0 - Initial Rollout', layer: LAYERS.RELEASE, type: 'Release', source: 'JIRA (MDSO)' },
+            { id: 'rel-101', label: 'REL: Mesh v1.1 - Traffic Mgmt', layer: LAYERS.RELEASE, type: 'Release', source: 'JIRA (MDSO)' },
+            { id: 'rel-102', label: 'REL: Mesh v1.2 - Resilience', layer: LAYERS.RELEASE, type: 'Release', source: 'JIRA (MDSO)' },
+
+            // Deployments (Layer 7) — IH deploy types
+            { id: 'dep-501', label: 'DEP: IH-Deploy staging-east 03/15', layer: LAYERS.DEPLOYMENT, type: 'Deployment', source: 'JIRA (IH)' },
+            { id: 'dep-502', label: 'DEP: IH-Deploy prod-east 03/22', layer: LAYERS.DEPLOYMENT, type: 'Deployment', source: 'JIRA (IH)' },
+            { id: 'dep-503', label: 'DEP: IH-Deploy staging-west 04/01', layer: LAYERS.DEPLOYMENT, type: 'Deployment', source: 'JIRA (IH)' },
+            { id: 'dep-504', label: 'DEP: IH-Deploy prod-west 04/08', layer: LAYERS.DEPLOYMENT, type: 'Deployment', source: 'JIRA (IH)' },
         ],
         links: [
             // Objectives → Initiatives
@@ -124,116 +162,40 @@ const SAMPLE_DATA = {
             { source: 'story-306', target: 'pr-408', value: 1 },
             { source: 'story-306', target: 'pr-410', value: 1 },
             { source: 'story-307', target: 'pr-409', value: 1 },
+
+            // PRs → Releases
+            { source: 'pr-401', target: 'rel-100', value: 1 },
+            { source: 'pr-402', target: 'rel-100', value: 1 },
+            { source: 'pr-403', target: 'rel-100', value: 1 },
+            { source: 'pr-404', target: 'rel-101', value: 1 },
+            { source: 'pr-405', target: 'rel-101', value: 1 },
+            { source: 'pr-406', target: 'rel-102', value: 1 },
+            { source: 'pr-407', target: 'rel-102', value: 1 },
+            { source: 'pr-408', target: 'rel-102', value: 1 },
+            { source: 'pr-409', target: 'rel-102', value: 1 },
+            { source: 'pr-410', target: 'rel-102', value: 1 },
+
+            // Releases → Deployments
+            { source: 'rel-100', target: 'dep-501', value: 3 },
+            { source: 'rel-100', target: 'dep-502', value: 3 },
+            { source: 'rel-101', target: 'dep-502', value: 2 },
+            { source: 'rel-101', target: 'dep-503', value: 2 },
+            { source: 'rel-102', target: 'dep-503', value: 3 },
+            { source: 'rel-102', target: 'dep-504', value: 5 },
         ]
     },
-
-    'MDSO-2002': {
-        nodes: [
-            // Objectives
-            { id: 'obj-3', label: 'OBJ: Accelerate Time-to-Market', layer: LAYERS.OBJECTIVE, type: 'Objective', source: 'Strategy' },
-
-            // Initiatives
-            { id: 'init-3', label: 'INIT: CI/CD Pipeline Modernization', layer: LAYERS.INITIATIVE, type: 'Initiative', source: 'JIRA' },
-
-            // MDSO Projects
-            { id: 'mdso-2002', label: 'MDSO-2002: Pipeline as Code', layer: LAYERS.MDSO_PROJECT, type: 'MDSO Project', source: 'JIRA' },
-
-            // Epics / Features
-            { id: 'epic-201', label: 'EPIC: GitHub Actions Migration', layer: LAYERS.EPIC_FEATURE, type: 'Epic', source: 'JIRA' },
-            { id: 'feat-301', label: 'FEAT: Reusable Workflow Library', layer: LAYERS.EPIC_FEATURE, type: 'Feature', source: 'Aha!' },
-            { id: 'epic-202', label: 'EPIC: Artifact Management', layer: LAYERS.EPIC_FEATURE, type: 'Epic', source: 'JIRA' },
-
-            // Stories
-            { id: 'story-401', label: 'STORY: Convert Jenkins to GHA', layer: LAYERS.STORY, type: 'Story', source: 'JIRA' },
-            { id: 'story-402', label: 'STORY: Matrix build strategy', layer: LAYERS.STORY, type: 'Story', source: 'JIRA' },
-            { id: 'story-403', label: 'STORY: Shared action templates', layer: LAYERS.STORY, type: 'Story', source: 'JIRA' },
-            { id: 'story-404', label: 'STORY: Docker layer caching', layer: LAYERS.STORY, type: 'Story', source: 'JIRA' },
-            { id: 'story-405', label: 'STORY: SBOM generation', layer: LAYERS.STORY, type: 'Story', source: 'JIRA' },
-
-            // PRs
-            { id: 'pr-501', label: 'PR #501: GHA workflow files', layer: LAYERS.PR, type: 'PR', source: 'GitHub' },
-            { id: 'pr-502', label: 'PR #502: Matrix config', layer: LAYERS.PR, type: 'PR', source: 'GitHub' },
-            { id: 'pr-503', label: 'PR #503: Composite action lib', layer: LAYERS.PR, type: 'PR', source: 'GitHub' },
-            { id: 'pr-504', label: 'PR #504: Docker buildx cache', layer: LAYERS.PR, type: 'PR', source: 'GitHub' },
-            { id: 'pr-505', label: 'PR #505: Syft SBOM step', layer: LAYERS.PR, type: 'PR', source: 'GitHub' },
-            { id: 'pr-506', label: 'PR #506: Attestation signing', layer: LAYERS.PR, type: 'PR', source: 'GitHub' },
-        ],
-        links: [
-            { source: 'obj-3', target: 'init-3', value: 5 },
-            { source: 'init-3', target: 'mdso-2002', value: 5 },
-            { source: 'mdso-2002', target: 'epic-201', value: 3 },
-            { source: 'mdso-2002', target: 'feat-301', value: 2 },
-            { source: 'mdso-2002', target: 'epic-202', value: 2 },
-            { source: 'epic-201', target: 'story-401', value: 2 },
-            { source: 'epic-201', target: 'story-402', value: 1 },
-            { source: 'feat-301', target: 'story-403', value: 2 },
-            { source: 'epic-202', target: 'story-404', value: 1 },
-            { source: 'epic-202', target: 'story-405', value: 1 },
-            { source: 'story-401', target: 'pr-501', value: 1 },
-            { source: 'story-402', target: 'pr-502', value: 1 },
-            { source: 'story-403', target: 'pr-503', value: 1 },
-            { source: 'story-404', target: 'pr-504', value: 1 },
-            { source: 'story-405', target: 'pr-505', value: 1 },
-            { source: 'story-405', target: 'pr-506', value: 1 },
-        ]
-    }
 };
 
 /**
  * Fetch traceability data for an MDSO project reference.
- * 
- * In production, replace this with real API calls:
- *   1. Query JIRA for the MDSO project → get linked Initiatives & Objectives (upward)
- *   2. Query JIRA for the MDSO project → get linked Epics (downward)
- *   3. Query Aha! for linked Features
- *   4. For each Epic/Feature → get Stories from JIRA
- *   5. For each Story → get linked PRs from GitHub/Bitbucket
- * 
  * @param {string} mdsoRef - The MDSO project reference (e.g., "MDSO-1001")
  * @returns {Promise<{nodes: Array, links: Array} | null>}
  */
 async function fetchTraceabilityData(mdsoRef) {
-    // Normalize input
     const ref = mdsoRef.trim().toUpperCase();
-
-    // --- SAMPLE DATA MODE ---
     if (SAMPLE_DATA[ref]) {
-        // Simulate network delay
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 300));
         return SAMPLE_DATA[ref];
     }
-
-    // --- PRODUCTION MODE (uncomment and configure) ---
-    // return await fetchFromAPIs(ref);
-
     return null;
 }
-
-/**
- * Production API integration stub.
- * Uncomment and configure with your actual endpoints and auth tokens.
- */
-// async function fetchFromAPIs(mdsoRef) {
-//     const JIRA_BASE = 'https://your-org.atlassian.net/rest/api/3';
-//     const JIRA_TOKEN = 'Bearer YOUR_JIRA_API_TOKEN';
-//     const AHA_BASE = 'https://your-org.aha.io/api/v1';
-//     const AHA_TOKEN = 'Bearer YOUR_AHA_API_TOKEN';
-//     const GITHUB_BASE = 'https://api.github.com';
-//     const GITHUB_TOKEN = 'Bearer YOUR_GITHUB_TOKEN';
-//
-//     const headers = (token) => ({ 'Authorization': token, 'Content-Type': 'application/json' });
-//
-//     // Step 1: Get MDSO Project issue and its links
-//     const mdsoIssue = await fetch(`${JIRA_BASE}/issue/${mdsoRef}?expand=issuelinks`, {
-//         headers: headers(JIRA_TOKEN)
-//     }).then(r => r.json());
-//
-//     // Step 2: Traverse links upward (Initiatives, Objectives)
-//     // Step 3: Traverse links downward (Epics)
-//     // Step 4: Query Aha! for features linked to this project
-//     // Step 5: For each epic/feature, get child stories
-//     // Step 6: For each story, query GitHub PRs that reference it
-//
-//     // Build and return { nodes, links } structure
-//     return { nodes: [...], links: [...] };
-// }

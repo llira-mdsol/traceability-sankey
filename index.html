@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MDSO Traceability Sankey Diagram</title>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -19,20 +20,22 @@
             min-height: 100vh;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
 
         header {
             background: #16213e;
-            padding: 1rem 2rem;
+            padding: 0.75rem 1.5rem;
             border-bottom: 1px solid #0f3460;
             display: flex;
             align-items: center;
-            gap: 1.5rem;
+            gap: 1rem;
             flex-wrap: wrap;
+            z-index: 10;
         }
 
         header h1 {
-            font-size: 1.3rem;
+            font-size: 1.2rem;
             color: #4fc3f7;
             white-space: nowrap;
         }
@@ -40,11 +43,11 @@
         .input-group {
             display: flex;
             align-items: center;
-            gap: 0.5rem;
+            gap: 0.4rem;
         }
 
         .input-group label {
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             color: #90caf9;
             white-space: nowrap;
         }
@@ -53,10 +56,10 @@
             background: #0d1b2a;
             border: 1px solid #0f3460;
             color: #e0e0e0;
-            padding: 0.4rem 0.75rem;
+            padding: 0.35rem 0.6rem;
             border-radius: 4px;
-            font-size: 0.9rem;
-            width: 200px;
+            font-size: 0.85rem;
+            width: 160px;
         }
 
         .input-group input:focus {
@@ -64,29 +67,35 @@
             border-color: #4fc3f7;
         }
 
-        button#loadBtn, button#importBtn, button#pasteBtn {
+        .btn {
             background: #0f3460;
             color: #4fc3f7;
             border: 1px solid #4fc3f7;
-            padding: 0.4rem 1rem;
+            padding: 0.35rem 0.8rem;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             transition: background 0.2s;
+            white-space: nowrap;
         }
 
-        button#loadBtn:hover, button#importBtn:hover, button#pasteBtn:hover {
+        .btn:hover {
             background: #1a4a7a;
         }
 
-        button#importBtn, button#pasteBtn {
+        .btn-green {
             border-color: #66bb6a;
             color: #66bb6a;
         }
 
+        .btn-reset {
+            border-color: #ffab40;
+            color: #ffab40;
+        }
+
         .legend {
             display: flex;
-            gap: 1rem;
+            gap: 0.7rem;
             margin-left: auto;
             flex-wrap: wrap;
         }
@@ -94,40 +103,93 @@
         .legend-item {
             display: flex;
             align-items: center;
-            gap: 0.3rem;
-            font-size: 0.75rem;
+            gap: 0.25rem;
+            font-size: 0.7rem;
         }
 
         .legend-dot {
-            width: 10px;
-            height: 10px;
+            width: 9px;
+            height: 9px;
             border-radius: 50%;
         }
 
         #chart-container {
             flex: 1;
-            padding: 1rem;
-            min-height: 600px;
+            position: relative;
+            overflow: hidden;
+            cursor: grab;
+        }
+
+        #chart-container:active {
+            cursor: grabbing;
         }
 
         #sankey-chart {
             width: 100%;
             height: 100%;
-            min-height: 580px;
         }
 
         .status-bar {
             background: #16213e;
-            padding: 0.5rem 2rem;
+            padding: 0.4rem 1.5rem;
             border-top: 1px solid #0f3460;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             color: #78909c;
             display: flex;
             justify-content: space-between;
+            align-items: center;
+            z-index: 10;
         }
 
         .status-bar .data-source {
             color: #ffab40;
+        }
+
+        .zoom-info {
+            color: #546e7a;
+            font-style: italic;
+        }
+
+        /* Sankey node labels */
+        .node-label {
+            font-size: 10px;
+            fill: #b0bec5;
+            pointer-events: none;
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: absolute;
+            background: #16213e;
+            border: 1px solid #4fc3f7;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 0.75rem;
+            color: #e0e0e0;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.15s;
+            z-index: 100;
+            max-width: 300px;
+        }
+
+        .tooltip .tt-title {
+            font-weight: 600;
+            color: #4fc3f7;
+            margin-bottom: 4px;
+        }
+
+        .tooltip .tt-row {
+            color: #90a4ae;
+            font-size: 0.7rem;
+        }
+
+        /* Layer column headers */
+        .layer-header {
+            font-size: 11px;
+            font-weight: 600;
+            text-anchor: middle;
+            fill: #546e7a;
         }
 
         #loading {
@@ -165,27 +227,23 @@
             <label for="mdso-ref">MDSO Project:</label>
             <input type="text" id="mdso-ref" placeholder="e.g. MDSO-1234" value="MDSO-1001">
         </div>
-        <button id="loadBtn" onclick="loadDiagram()">Load Sample</button>
-        <button id="importBtn" onclick="document.getElementById('json-file').click()">Import JSON</button>
-        <button id="pasteBtn" onclick="pasteFromClipboard()">Paste JSON</button>
+        <button class="btn" id="loadBtn" onclick="loadDiagram()">Load Sample</button>
+        <button class="btn btn-green" id="importBtn" onclick="document.getElementById('json-file').click()">Import JSON</button>
+        <button class="btn btn-green" id="pasteBtn" onclick="pasteFromClipboard()">Paste JSON</button>
+        <button class="btn btn-reset" id="resetZoomBtn" onclick="resetZoom()">Reset Zoom</button>
         <input type="file" id="json-file" accept=".json" style="display:none" onchange="importJSONFile(event)">
-        <div class="legend">
-            <div class="legend-item"><div class="legend-dot" style="background:#e57373"></div>Objectives</div>
-            <div class="legend-item"><div class="legend-dot" style="background:#ffb74d"></div>Initiatives</div>
-            <div class="legend-item"><div class="legend-dot" style="background:#fff176"></div>MDSO Projects</div>
-            <div class="legend-item"><div class="legend-dot" style="background:#81c784"></div>Epics/Features</div>
-            <div class="legend-item"><div class="legend-dot" style="background:#4fc3f7"></div>Stories</div>
-            <div class="legend-item"><div class="legend-dot" style="background:#ce93d8"></div>PRs</div>
-        </div>
+        <div class="legend" id="legend"></div>
     </header>
 
     <div id="chart-container">
-        <div id="sankey-chart"></div>
+        <svg id="sankey-chart"></svg>
+        <div class="tooltip" id="tooltip"></div>
     </div>
 
     <div class="status-bar">
         <span id="status-text">Ready — enter an MDSO project reference and click Load</span>
-        <span class="data-source" id="data-source">Data: Sample (see README for API integration)</span>
+        <span class="zoom-info" id="zoom-info">Scroll to zoom • Drag to pan</span>
+        <span class="data-source" id="data-source">Data: Sample</span>
     </div>
 
     <div id="loading">

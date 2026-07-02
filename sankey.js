@@ -1,108 +1,278 @@
 /**
- * Sankey Diagram Rendering Engine
- * Uses Plotly.js to render the traceability Sankey diagram.
+ * Sankey Diagram Rendering Engine — D3 + d3-sankey
+ * Supports pan, zoom, drag nodes, tooltips, and 8 layers.
  */
 
+let currentZoomTransform = d3.zoomIdentity;
+let zoomBehavior = null;
+let svgElement = null;
+
 /**
- * Convert our data model into Plotly Sankey format.
- * Plotly expects numeric indices for source/target, not string IDs.
+ * Build the legend dynamically from LAYER_NAMES and LAYER_COLORS
  */
-function buildSankeyData(traceData) {
+function buildLegend() {
+    const legend = document.getElementById('legend');
+    legend.innerHTML = '';
+    for (const [layer, name] of Object.entries(LAYER_NAMES)) {
+        const item = document.createElement('div');
+        item.className = 'legend-item';
+        item.innerHTML = `<div class="legend-dot" style="background:${LAYER_COLORS[layer]}"></div>${name}`;
+        legend.appendChild(item);
+    }
+}
+
+/**
+ * Render the Sankey diagram using D3.
+ */
+function renderSankey(traceData, mdsoRef) {
+    const container = document.getElementById('chart-container');
+    const svg = d3.select('#sankey-chart');
+    svg.selectAll('*').remove();
+
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+
+    svg.attr('width', width).attr('height', height);
+    svgElement = svg;
+
+    const margin = { top: 40, right: 30, bottom: 20, left: 30 };
+    const innerWidth = width - margin.left - margin.right;
+    const innerHeight = height - margin.top - margin.bottom;
+
+    // Build node index map
     const nodeMap = new Map();
     traceData.nodes.forEach((node, idx) => {
         nodeMap.set(node.id, idx);
     });
 
-    const labels = traceData.nodes.map(n => n.label);
-    const nodeColors = traceData.nodes.map(n => LAYER_COLORS[n.layer]);
-
-    const customdata = traceData.nodes.map(n => ({
-        type: n.type,
-        source: n.source,
-        id: n.id
+    // Build d3-sankey compatible data
+    const sankeyNodes = traceData.nodes.map(n => ({
+        ...n,
+        name: n.label
     }));
 
-    const sourceIndices = [];
-    const targetIndices = [];
-    const values = [];
-    const linkColors = [];
+    const sankeyLinks = traceData.links
+        .filter(l => nodeMap.has(l.source) && nodeMap.has(l.target))
+        .map(l => ({
+            source: nodeMap.get(l.source),
+            target: nodeMap.get(l.target),
+            value: l.value || 1
+        }));
 
-    traceData.links.forEach(link => {
-        const srcIdx = nodeMap.get(link.source);
-        const tgtIdx = nodeMap.get(link.target);
-        if (srcIdx !== undefined && tgtIdx !== undefined) {
-            sourceIndices.push(srcIdx);
-            targetIndices.push(tgtIdx);
-            values.push(link.value);
-            // Color link by source node's layer
-            const srcNode = traceData.nodes[srcIdx];
-            linkColors.push(LINK_COLORS[srcNode.layer]);
-        }
+    // Configure sankey layout
+    const numLayers = Object.keys(LAYERS).length;
+    const sankey = d3.sankey()
+        .nodeId(d => d.id)
+        .nodeWidth(18)
+        .nodePadding(14)
+        .nodeSort(null)
+        .nodeAlign((node) => {
+            // Force nodes into their layer column
+            return node.layer;
+        })
+        .extent([[0, 0], [innerWidth, innerHeight]]);
+
+    // Compute layout
+    const graph = sankey({
+        nodes: sankeyNodes.map(d => ({ ...d })),
+        links: sankeyLinks.map(d => ({ ...d }))
     });
 
-    return {
-        type: 'sankey',
-        orientation: 'h',
-        arrangement: 'snap',
-        node: {
-            pad: 20,
-            thickness: 25,
-            line: { color: 'rgba(255,255,255,0.3)', width: 0.5 },
-            label: labels,
-            color: nodeColors,
-            customdata: customdata,
-            hovertemplate: '<b>%{label}</b><br>Type: %{customdata.type}<br>Source: %{customdata.source}<br>ID: %{customdata.id}<extra></extra>'
-        },
-        link: {
-            source: sourceIndices,
-            target: targetIndices,
-            value: values,
-            color: linkColors,
-            hovertemplate: '%{source.label}<br>→ %{target.label}<br>Weight: %{value}<extra></extra>'
+    // Create zoom group
+    const zoomGroup = svg.append('g').attr('class', 'zoom-group');
+
+    // Apply zoom behavior
+    zoomBehavior = d3.zoom()
+        .scaleExtent([0.3, 5])
+        .on('zoom', (event) => {
+            currentZoomTransform = event.transform;
+            zoomGroup.attr('transform', event.transform);
+            updateZoomInfo(event.transform.k);
+        });
+
+    svg.call(zoomBehavior);
+
+    // Offset group for margins
+    const g = zoomGroup.append('g')
+        .attr('transform', `translate(${margin.left},${margin.top})`);
+
+    // Layer headers
+    const layerPositions = {};
+    graph.nodes.forEach(node => {
+        const layer = node.layer;
+        if (!layerPositions[layer]) {
+            layerPositions[layer] = { minX: Infinity, maxX: -Infinity };
         }
-    };
+        layerPositions[layer].minX = Math.min(layerPositions[layer].minX, node.x0);
+        layerPositions[layer].maxX = Math.max(layerPositions[layer].maxX, node.x1);
+    });
+
+    for (const [layer, pos] of Object.entries(layerPositions)) {
+        const centerX = (pos.minX + pos.maxX) / 2;
+        g.append('text')
+            .attr('class', 'layer-header')
+            .attr('x', centerX)
+            .attr('y', -15)
+            .attr('fill', LAYER_COLORS[layer])
+            .text(LAYER_NAMES[layer]);
+    }
+
+    // Draw links
+    const link = g.append('g')
+        .attr('fill', 'none')
+        .attr('stroke-opacity', 0.35)
+        .selectAll('path')
+        .data(graph.links)
+        .join('path')
+        .attr('d', d3.sankeyLinkHorizontal())
+        .attr('stroke', d => LAYER_COLORS[d.source.layer])
+        .attr('stroke-width', d => Math.max(2, d.width))
+        .style('mix-blend-mode', 'screen')
+        .on('mouseover', function(event, d) {
+            d3.select(this).attr('stroke-opacity', 0.7);
+            showTooltip(event, `
+                <div class="tt-title">${d.source.label} → ${d.target.label}</div>
+                <div class="tt-row">Weight: ${d.value}</div>
+            `);
+        })
+        .on('mousemove', (event) => moveTooltip(event))
+        .on('mouseout', function() {
+            d3.select(this).attr('stroke-opacity', 0.35);
+            hideTooltip();
+        });
+
+    // Draw nodes
+    const node = g.append('g')
+        .selectAll('g')
+        .data(graph.nodes)
+        .join('g')
+        .attr('transform', d => `translate(${d.x0},${d.y0})`)
+        .call(d3.drag()
+            .on('start', function() { this.parentNode.appendChild(this); })
+            .on('drag', function(event, d) {
+                const dy = event.dy;
+                d.y0 += dy;
+                d.y1 += dy;
+                d3.select(this).attr('transform', `translate(${d.x0},${d.y0})`);
+                sankey.update(graph);
+                link.attr('d', d3.sankeyLinkHorizontal());
+            })
+        );
+
+    // Node rectangles
+    node.append('rect')
+        .attr('width', d => d.x1 - d.x0)
+        .attr('height', d => Math.max(4, d.y1 - d.y0))
+        .attr('fill', d => LAYER_COLORS[d.layer])
+        .attr('stroke', 'rgba(255,255,255,0.2)')
+        .attr('stroke-width', 0.5)
+        .attr('rx', 3)
+        .attr('ry', 3)
+        .style('cursor', 'ns-resize')
+        .on('mouseover', function(event, d) {
+            d3.select(this).attr('stroke', '#fff').attr('stroke-width', 1.5);
+            showTooltip(event, `
+                <div class="tt-title">${d.label}</div>
+                <div class="tt-row">Type: ${d.type}</div>
+                <div class="tt-row">Source: ${d.source}</div>
+                <div class="tt-row">Layer: ${LAYER_NAMES[d.layer]}</div>
+                ${d.status ? `<div class="tt-row">Status: ${d.status}</div>` : ''}
+                ${d.key ? `<div class="tt-row">Key: ${d.key}</div>` : ''}
+            `);
+        })
+        .on('mousemove', (event) => moveTooltip(event))
+        .on('mouseout', function() {
+            d3.select(this).attr('stroke', 'rgba(255,255,255,0.2)').attr('stroke-width', 0.5);
+            hideTooltip();
+        });
+
+    // Node labels
+    node.append('text')
+        .attr('class', 'node-label')
+        .attr('x', d => (d.x1 - d.x0) + 6)
+        .attr('y', d => (d.y1 - d.y0) / 2)
+        .attr('dy', '0.35em')
+        .attr('text-anchor', 'start')
+        .text(d => {
+            // Truncate long labels
+            const maxLen = 30;
+            return d.label.length > maxLen ? d.label.substring(0, maxLen) + '…' : d.label;
+        })
+        .each(function(d) {
+            // If node is on the right side, put label on the left
+            if (d.layer >= numLayers - 2) {
+                d3.select(this)
+                    .attr('x', -6)
+                    .attr('text-anchor', 'end');
+            }
+        });
+
+    // Initial fit
+    fitToContent(svg, zoomGroup, width, height, margin);
 }
 
 /**
- * Render the Sankey diagram in the target element.
+ * Fit the diagram content to the viewport
  */
-function renderSankey(traceData, mdsoRef) {
-    const sankeyData = buildSankeyData(traceData);
+function fitToContent(svg, zoomGroup, width, height, margin) {
+    const bounds = zoomGroup.node().getBBox();
+    if (bounds.width === 0 || bounds.height === 0) return;
 
-    const layout = {
-        title: {
-            text: `Traceability: ${mdsoRef}`,
-            font: { size: 16, color: '#4fc3f7' },
-            x: 0.01
-        },
-        font: { size: 11, color: '#b0bec5', family: '-apple-system, BlinkMacSystemFont, sans-serif' },
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        margin: { l: 10, r: 10, t: 50, b: 30 },
-        // Annotations for layer headers
-        annotations: [
-            { x: 0.0, y: 1.08, text: '<b>Objectives</b>', showarrow: false, font: { color: '#e57373', size: 12 }, xref: 'paper', yref: 'paper' },
-            { x: 0.2, y: 1.08, text: '<b>Initiatives</b>', showarrow: false, font: { color: '#ffb74d', size: 12 }, xref: 'paper', yref: 'paper' },
-            { x: 0.4, y: 1.08, text: '<b>MDSO Projects</b>', showarrow: false, font: { color: '#fff176', size: 12 }, xref: 'paper', yref: 'paper' },
-            { x: 0.6, y: 1.08, text: '<b>Epics / Features</b>', showarrow: false, font: { color: '#81c784', size: 12 }, xref: 'paper', yref: 'paper' },
-            { x: 0.8, y: 1.08, text: '<b>Stories</b>', showarrow: false, font: { color: '#4fc3f7', size: 12 }, xref: 'paper', yref: 'paper' },
-            { x: 1.0, y: 1.08, text: '<b>PRs</b>', showarrow: false, font: { color: '#ce93d8', size: 12 }, xref: 'paper', yref: 'paper' },
-        ]
-    };
+    const fullWidth = bounds.width + 60;
+    const fullHeight = bounds.height + 60;
+    const scale = Math.min(
+        width / fullWidth,
+        height / fullHeight,
+        1.2 // don't over-zoom
+    );
 
-    const config = {
-        responsive: true,
-        displayModeBar: true,
-        modeBarButtonsToRemove: ['lasso2d', 'select2d'],
-        displaylogo: false
-    };
+    const tx = (width - bounds.width * scale) / 2 - bounds.x * scale;
+    const ty = (height - bounds.height * scale) / 2 - bounds.y * scale;
 
-    Plotly.newPlot('sankey-chart', [sankeyData], layout, config);
+    const transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
+    svg.call(zoomBehavior.transform, transform);
 }
 
 /**
- * Main entry point — called when user clicks "Load Traceability"
+ * Reset zoom to fit content
  */
+function resetZoom() {
+    if (!svgElement || !zoomBehavior) return;
+    const container = document.getElementById('chart-container');
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    const zoomGroup = svgElement.select('.zoom-group');
+    fitToContent(svgElement, zoomGroup, width, height, { top: 40, right: 30, bottom: 20, left: 30 });
+}
+
+function updateZoomInfo(scale) {
+    document.getElementById('zoom-info').textContent =
+        `Zoom: ${Math.round(scale * 100)}% • Scroll to zoom • Drag to pan`;
+}
+
+// ===== TOOLTIP =====
+
+function showTooltip(event, html) {
+    const tooltip = document.getElementById('tooltip');
+    tooltip.innerHTML = html;
+    tooltip.style.opacity = '1';
+    moveTooltip(event);
+}
+
+function moveTooltip(event) {
+    const tooltip = document.getElementById('tooltip');
+    const x = event.clientX + 12;
+    const y = event.clientY - 10;
+    tooltip.style.left = x + 'px';
+    tooltip.style.top = y + 'px';
+}
+
+function hideTooltip() {
+    document.getElementById('tooltip').style.opacity = '0';
+}
+
+// ===== DATA LOADING =====
+
 async function loadDiagram() {
     const input = document.getElementById('mdso-ref');
     const mdsoRef = input.value.trim().toUpperCase();
@@ -120,22 +290,16 @@ async function loadDiagram() {
 
         if (!data) {
             showLoading(false);
-            updateStatus(`❌ No data found for ${mdsoRef}. Try MDSO-1001 or MDSO-2002 (sample data).`, 'error');
+            updateStatus(`❌ No data found for ${mdsoRef}. Try MDSO-1001 (sample data).`, 'error');
             return;
         }
 
         renderSankey(data, mdsoRef);
+        showLoading(false);
 
         const nodeCount = data.nodes.length;
         const linkCount = data.links.length;
-        const prCount = data.nodes.filter(n => n.type === 'PR').length;
-        const storyCount = data.nodes.filter(n => n.type === 'Story').length;
-
-        showLoading(false);
-        updateStatus(
-            `✅ ${mdsoRef} — ${nodeCount} nodes, ${linkCount} links | ${prCount} PRs → ${storyCount} Stories`,
-            'success'
-        );
+        updateStatus(`✅ ${mdsoRef} — ${nodeCount} nodes, ${linkCount} links`, 'success');
     } catch (err) {
         showLoading(false);
         updateStatus(`❌ Error: ${err.message}`, 'error');
@@ -143,29 +307,6 @@ async function loadDiagram() {
     }
 }
 
-function showLoading(show) {
-    document.getElementById('loading').style.display = show ? 'block' : 'none';
-}
-
-function updateStatus(message, type) {
-    const el = document.getElementById('status-text');
-    el.textContent = message;
-    el.style.color = type === 'error' ? '#ef5350' : type === 'success' ? '#66bb6a' : '#78909c';
-}
-
-// Auto-load on page ready
-document.addEventListener('DOMContentLoaded', () => {
-    loadDiagram();
-});
-
-// Allow Enter key to trigger load
-document.getElementById('mdso-ref').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') loadDiagram();
-});
-
-/**
- * Import JSON from a file upload
- */
 function importJSONFile(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -180,13 +321,9 @@ function importJSONFile(event) {
         }
     };
     reader.readAsText(file);
-    // Reset input so same file can be re-imported
     event.target.value = '';
 }
 
-/**
- * Paste JSON from clipboard
- */
 async function pasteFromClipboard() {
     try {
         const text = await navigator.clipboard.readText();
@@ -197,10 +334,6 @@ async function pasteFromClipboard() {
     }
 }
 
-/**
- * Load scraped JSON data into the Sankey diagram.
- * Accepts the format produced by the Tampermonkey scraper.
- */
 function loadFromJSON(data) {
     if (!data.nodes || !data.links) {
         updateStatus('❌ Invalid format: expected { nodes: [...], links: [...] }', 'error');
@@ -210,7 +343,6 @@ function loadFromJSON(data) {
     const mdsoRef = data.mdsoRef || 'Imported Data';
     document.getElementById('mdso-ref').value = mdsoRef;
 
-    // Update data source indicator
     const sourceEl = document.getElementById('data-source');
     if (data.scrapedAt) {
         sourceEl.textContent = `Data: Scraped ${new Date(data.scrapedAt).toLocaleString()}`;
@@ -222,11 +354,35 @@ function loadFromJSON(data) {
 
     const nodeCount = data.nodes.length;
     const linkCount = data.links.length;
-    const prCount = data.nodes.filter(n => n.type === 'PR').length;
-    const storyCount = data.nodes.filter(n => n.type === 'Story' || n.layer === 4).length;
-
-    updateStatus(
-        `✅ ${mdsoRef} — ${nodeCount} nodes, ${linkCount} links | ${prCount} PRs, ${storyCount} Stories (imported)`,
-        'success'
-    );
+    updateStatus(`✅ ${mdsoRef} — ${nodeCount} nodes, ${linkCount} links (imported)`, 'success');
 }
+
+// ===== UTILS =====
+
+function showLoading(show) {
+    document.getElementById('loading').style.display = show ? 'block' : 'none';
+}
+
+function updateStatus(message, type) {
+    const el = document.getElementById('status-text');
+    el.textContent = message;
+    el.style.color = type === 'error' ? '#ef5350' : type === 'success' ? '#66bb6a' : '#78909c';
+}
+
+// ===== INIT =====
+
+document.addEventListener('DOMContentLoaded', () => {
+    buildLegend();
+    loadDiagram();
+});
+
+document.getElementById('mdso-ref').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') loadDiagram();
+});
+
+// Handle window resize
+window.addEventListener('resize', () => {
+    if (svgElement) {
+        resetZoom();
+    }
+});
