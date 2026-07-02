@@ -48,13 +48,40 @@ function renderSankey(traceData, mdsoRef) {
         name: n.label
     }));
 
+    // Build layer lookup for link filtering
+    const nodeLayerMap = new Map(traceData.nodes.map(n => [n.id, n.layer]));
+
     const sankeyLinks = traceData.links
-        .filter(l => nodeIdSet.has(l.source) && nodeIdSet.has(l.target) && l.source !== l.target)
+        .filter(l => {
+            if (!nodeIdSet.has(l.source) || !nodeIdSet.has(l.target)) return false;
+            if (l.source === l.target) return false;
+            // d3-sankey requires links to flow forward (source layer < target layer)
+            const srcLayer = nodeLayerMap.get(l.source);
+            const tgtLayer = nodeLayerMap.get(l.target);
+            return srcLayer < tgtLayer;
+        })
         .map(l => ({
             source: l.source,
             target: l.target,
             value: Math.max(1, l.value || 1)
         }));
+
+    // Remove orphan nodes (no links after filtering)
+    const connectedIds = new Set();
+    sankeyLinks.forEach(l => {
+        connectedIds.add(l.source);
+        connectedIds.add(l.target);
+    });
+    const filteredNodes = sankeyNodes.filter(n => connectedIds.has(n.id));
+
+    if (filteredNodes.length === 0 || sankeyLinks.length === 0) {
+        updateStatus(`⚠️ No valid forward-flowing links found. Nodes: ${sankeyNodes.length}, Filtered links: ${sankeyLinks.length}`, 'error');
+        console.warn('All links filtered. This may mean links go between same-layer or backward nodes.');
+        console.log('Layer distribution:', Object.entries(
+            traceData.nodes.reduce((acc, n) => { acc[n.layer] = (acc[n.layer] || 0) + 1; return acc; }, {})
+        ));
+        return;
+    }
 
     // Configure sankey layout
     const numLayers = Object.keys(LAYERS).length;
@@ -73,17 +100,17 @@ function renderSankey(traceData, mdsoRef) {
     let graph;
     try {
         graph = sankey({
-            nodes: sankeyNodes.map(d => ({ ...d })),
+            nodes: filteredNodes.map(d => ({ ...d })),
             links: sankeyLinks.map(d => ({ ...d }))
         });
     } catch (err) {
         console.error('Sankey layout error:', err);
-        console.log('Nodes:', sankeyNodes.length, 'Links:', sankeyLinks.length);
+        console.log('Nodes:', filteredNodes.length, 'Links:', sankeyLinks.length);
         // Log orphan links for debugging
-        const ids = new Set(sankeyNodes.map(n => n.id));
-        const badLinks = traceData.links.filter(l => !ids.has(l.source) || !ids.has(l.target));
+        const ids = new Set(filteredNodes.map(n => n.id));
+        const badLinks = sankeyLinks.filter(l => !ids.has(l.source) || !ids.has(l.target));
         if (badLinks.length) {
-            console.warn('Links referencing missing nodes:', badLinks);
+            console.warn('Links referencing missing nodes:', badLinks.slice(0, 10));
         }
         updateStatus(`❌ Layout error: ${err.message}. Check console for details.`, 'error');
         return;
@@ -351,21 +378,18 @@ function loadFromJSON(data) {
         return;
     }
 
-    // Ensure all nodes have a valid layer (handle legacy 6-layer scraped data)
+    // Always reassign layers based on node type to handle legacy/mis-mapped data
     data.nodes.forEach(node => {
-        if (node.layer === undefined || node.layer === null) {
-            // Guess layer from type if missing
-            const type = (node.type || '').toLowerCase();
-            if (type.includes('objective')) node.layer = 0;
-            else if (type.includes('initiative')) node.layer = 1;
-            else if (type.includes('mdso') && type.includes('project')) node.layer = 2;
-            else if (type.includes('epic') || type.includes('feature')) node.layer = 3;
-            else if (type.includes('story') || type.includes('task') || type.includes('bug')) node.layer = 4;
-            else if (type === 'pr' || type.includes('pull')) node.layer = 5;
-            else if (type.includes('release')) node.layer = 6;
-            else if (type.includes('deploy')) node.layer = 7;
-            else node.layer = 4;
-        }
+        const type = (node.type || '').toLowerCase();
+        if (type.includes('objective')) node.layer = 0;
+        else if (type.includes('initiative')) node.layer = 1;
+        else if (type === 'project' || (type.includes('mdso') && type.includes('project'))) node.layer = 2;
+        else if (type.includes('epic') || type.includes('feature')) node.layer = 3;
+        else if (type.includes('story') || type.includes('task') || type.includes('bug') || type.includes('risk') || type.includes('request') || type.includes('problem') || type.includes('access')) node.layer = 4;
+        else if (type === 'pr' || type.includes('pull')) node.layer = 5;
+        else if (type.includes('release')) node.layer = 6;
+        else if (type.includes('deploy')) node.layer = 7;
+        else node.layer = 4; // Default to story layer
     });
 
     const mdsoRef = data.mdsoRef || 'Imported Data';
