@@ -411,7 +411,8 @@ function loadFromJSON(data) {
         return;
     }
 
-    // Always reassign layers based on node type to handle legacy/mis-mapped data
+    // Assign layers based on node type (used for coloring and column placement)
+    // But respect the actual link structure for positioning
     data.nodes.forEach(node => {
         const type = (node.type || '').toLowerCase();
         if (type.includes('objective')) node.layer = 0;
@@ -424,6 +425,25 @@ function loadFromJSON(data) {
         else if (type.includes('deploy')) node.layer = 7;
         else node.layer = 4; // Default to story layer
     });
+
+    // For imported data, adjust layers so that links always flow forward.
+    // If a link goes from a higher layer to a lower layer, bump the target up.
+    const nodeMap = new Map(data.nodes.map(n => [n.id, n]));
+    let changed = true;
+    let iterations = 0;
+    while (changed && iterations < 20) {
+        changed = false;
+        iterations++;
+        for (const link of data.links) {
+            const src = nodeMap.get(link.source);
+            const tgt = nodeMap.get(link.target);
+            if (!src || !tgt) continue;
+            if (src.layer >= tgt.layer) {
+                tgt.layer = src.layer + 1;
+                changed = true;
+            }
+        }
+    }
 
     const mdsoRef = data.mdsoRef || 'Imported Data';
     document.getElementById('mdso-ref').value = mdsoRef;
