@@ -123,8 +123,12 @@ function renderSankey(traceData, mdsoRef) {
         .nodePadding(adaptivePadding)
         .nodeSort(null)
         .nodeAlign((node, n) => {
-            // Force nodes into their layer column, scaled to total columns
-            const layer = node.layer !== undefined ? node.layer : 4;
+            // Force nodes into their layer column
+            const layer = node.layer !== undefined ? node.layer : 2;
+            if (!window._alignDebugDone) {
+                window._alignDebugDone = true;
+                console.log('[Sankey] nodeAlign sample - node.layer:', node.layer, 'node.id:', node.id, 'n:', n);
+            }
             return layer;
         })
         .extent([[0, 0], [innerWidth, virtualHeight]]);
