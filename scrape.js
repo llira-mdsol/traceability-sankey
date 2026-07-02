@@ -118,7 +118,77 @@ async function main() {
     console.log(`   ✅ Authenticated as: ${myself.displayName || myself.name}\n`);
 
     // Crawl the issue hierarchy
-    await crawl(apiContext, issueKey.toUpperCase(), 0);
+    // Phase 1: Fetch the starting MDSO project to get:
+    //   - Directly linked epics (only these will be included)
+    //   - Epic Link field value (Objective)
+    console.log('   Phase 1: Fetching MDSO project and direct links...\n');
+    const startIssue = await fetchIssue(apiContext, issueKey.toUpperCase());
+    if (!startIssue) {
+        console.error(`   ❌ Could not fetch ${issueKey}`);
+        await apiContext.dispose();
+        process.exit(1);
+    }
+
+    const startNode = processIssue(startIssue);
+    visited.set(issueKey.toUpperCase(), startNode);
+
+    // Extract Objective from Epic Link custom field
+    const epicLinkValue = startIssue.fields?.customfield_10008
+        || startIssue.fields?.customfield_10006
+        || startIssue.fields?.customfield_10014;
+
+    if (epicLinkValue) {
+        const objLabel = typeof epicLinkValue === 'string' ? epicLinkValue : (epicLinkValue.name || epicLinkValue.value || JSON.stringify(epicLinkValue));
+        const objId = '__objective__';
+        visited.set(objId, {
+            id: objId,
+            key: 'Objective',
+            label: `OBJ: ${objLabel}`,
+            layer: 0,
+            type: 'Objective',
+            source: 'JIRA (Epic Link)',
+            status: ''
+        });
+        links.push({ source: objId, target: startNode.id, value: 1 });
+        console.log(`   📎 Objective (Epic Link): ${objLabel}\n`);
+    }
+
+    // Identify directly linked epics from the MDSO project issue links
+    const directlyLinkedEpics = new Set();
+    const issueLinks = startIssue.fields?.issuelinks || [];
+
+    for (const link of issueLinks) {
+        const linked = link.outwardIssue || link.inwardIssue;
+        if (!linked) continue;
+        const linkedType = linked.fields?.issuetype?.name || '';
+        const linkedKey = linked.key;
+
+        if (linkedType === 'Epic') {
+            directlyLinkedEpics.add(linkedKey);
+            links.push({ source: startNode.id, target: linkedKey.toLowerCase(), value: 1 });
+        } else {
+            // Non-epic links (Releases, etc.) - add directly
+            const targetLayer = getLayer(linkedType);
+            if (startNode.layer <= targetLayer) {
+                links.push({ source: startNode.id, target: linkedKey.toLowerCase(), value: 1 });
+            } else {
+                links.push({ source: linkedKey.toLowerCase(), target: startNode.id, value: 1 });
+            }
+            if (!visited.has(linkedKey)) {
+                // Crawl non-epic links normally
+                await crawl(apiContext, linkedKey, 1);
+            }
+        }
+    }
+
+    console.log(`   📌 Directly linked epics: ${directlyLinkedEpics.size}`);
+    console.log(`   ${[...directlyLinkedEpics].join(', ')}\n`);
+
+    // Phase 2: Crawl only the directly linked epics and their children
+    console.log('   Phase 2: Crawling directly linked epics...\n');
+    for (const epicKey of directlyLinkedEpics) {
+        await crawl(apiContext, epicKey, 1);
+    }
 
     // Build output
     const output = buildOutput(issueKey.toUpperCase());
@@ -247,7 +317,8 @@ async function apiGet(apiContext, endpoint) {
 }
 
 async function fetchIssue(apiContext, key) {
-    const data = await apiGet(apiContext, `/rest/api/${CONFIG.apiVersion}/issue/${key}?fields=summary,issuetype,status,issuelinks,parent,subtasks,project`);
+    const data = await apiGet(apiContext, `/rest/api/${CONFIG.apiVersion}/issue/${key}?fields=summary,issuetype,status,issuelinks,parent,subtasks,project,customfield_10008,customfield_10014,customfield_10006`);
+    // customfield_10008 = Epic Link (common), customfield_10014 = Epic Name, customfield_10006 = Epic Link (alt)
     if (data?.error) {
         if (data.error !== 404) {
             console.warn(`   ⚠️  Failed to fetch ${key}: ${data.error} ${data.statusText || ''}`);
@@ -310,7 +381,10 @@ function processIssue(issue) {
     const summary = fields.summary || key;
     const layer = getLayer(issueType);
 
-    return {
+    // Capture Epic Link field (Objective) if present
+    const epicLink = fields.customfield_10008 || fields.customfield_10006 || fields.customfield_10014;
+
+    const node = {
         id: key.toLowerCase(),
         key: key,
         label: `${issueType.toUpperCase().substring(0, 4)}: ${summary}`,
@@ -319,6 +393,12 @@ function processIssue(issue) {
         source: 'JIRA',
         status: fields.status?.name || 'Unknown'
     };
+
+    if (epicLink) {
+        node.epicLink = typeof epicLink === 'string' ? epicLink : (epicLink.name || epicLink.value || JSON.stringify(epicLink));
+    }
+
+    return node;
 }
 
 async function crawl(apiContext, key, depth) {
@@ -354,6 +434,9 @@ async function crawl(apiContext, key, depth) {
             const targetType = link.outwardIssue.fields?.issuetype?.name || 'Unknown';
             const targetLayer = getLayer(targetType);
 
+            // Skip epic links from non-starting projects (those are handled in Phase 1)
+            if (nodeData.type === 'Project' && targetType === 'Epic') continue;
+
             if (nodeData.layer <= targetLayer) {
                 links.push({ source: nodeData.id, target: targetKey.toLowerCase(), value: 1 });
             } else {
@@ -369,6 +452,9 @@ async function crawl(apiContext, key, depth) {
             const sourceKey = link.inwardIssue.key;
             const sourceType = link.inwardIssue.fields?.issuetype?.name || 'Unknown';
             const sourceLayer = getLayer(sourceType);
+
+            // Skip epic links from non-starting projects
+            if (nodeData.type === 'Project' && sourceType === 'Epic') continue;
 
             if (sourceLayer <= nodeData.layer) {
                 links.push({ source: sourceKey.toLowerCase(), target: nodeData.id, value: 1 });
