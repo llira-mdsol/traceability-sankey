@@ -25,12 +25,22 @@ function buildLegend() {
  * Render the Sankey diagram using D3.
  */
 function renderSankey(traceData, mdsoRef) {
+    // Verify d3-sankey loaded
+    if (typeof d3.sankey !== 'function') {
+        updateStatus('❌ d3-sankey library not loaded. Check network tab.', 'error');
+        console.error('d3.sankey is', typeof d3.sankey);
+        return;
+    }
+
     const container = document.getElementById('chart-container');
     const svg = d3.select('#sankey-chart');
     svg.selectAll('*').remove();
 
-    const width = container.clientWidth;
-    const height = container.clientHeight;
+    const width = container.clientWidth || 1200;
+    const height = container.clientHeight || 700;
+
+    console.log('[Sankey] Container dimensions:', width, 'x', height);
+    console.log('[Sankey] Input data:', traceData.nodes.length, 'nodes,', traceData.links.length, 'links');
 
     svg.attr('width', width).attr('height', height);
     svgElement = svg;
@@ -83,18 +93,32 @@ function renderSankey(traceData, mdsoRef) {
         return;
     }
 
+    console.log('[Sankey] Rendering:', filteredNodes.length, 'nodes,', sankeyLinks.length, 'links');
+    console.log('[Sankey] Layer dist:', filteredNodes.reduce((acc, n) => { acc[n.layer] = (acc[n.layer] || 0) + 1; return acc; }, {}));
+
     // Configure sankey layout
     const numLayers = Object.keys(LAYERS).length;
+    // Adapt padding based on dataset size
+    const maxNodesInLayer = Math.max(...Object.values(
+        filteredNodes.reduce((acc, n) => { acc[n.layer] = (acc[n.layer] || 0) + 1; return acc; }, {})
+    ));
+    const adaptivePadding = maxNodesInLayer > 50 ? 2 : maxNodesInLayer > 20 ? 6 : 14;
+    // For large datasets, expand the virtual height
+    const virtualHeight = Math.max(innerHeight, maxNodesInLayer * (adaptivePadding + 4));
+
+    console.log('[Sankey] Max nodes in layer:', maxNodesInLayer, '| Padding:', adaptivePadding, '| Virtual height:', virtualHeight);
+
     const sankey = d3.sankey()
         .nodeId(d => d.id)
         .nodeWidth(18)
-        .nodePadding(14)
+        .nodePadding(adaptivePadding)
         .nodeSort(null)
-        .nodeAlign((node) => {
-            // Force nodes into their layer column
-            return node.layer !== undefined ? node.layer : 4;
+        .nodeAlign((node, n) => {
+            // Force nodes into their layer column, scaled to total columns
+            const layer = node.layer !== undefined ? node.layer : 4;
+            return layer;
         })
-        .extent([[0, 0], [innerWidth, innerHeight]]);
+        .extent([[0, 0], [innerWidth, virtualHeight]]);
 
     // Compute layout
     let graph;
