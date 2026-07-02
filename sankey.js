@@ -559,3 +559,150 @@ window.addEventListener('resize', () => {
         resetZoom();
     }
 });
+
+// ===== EXPORT =====
+
+/**
+ * Export the diagram as a PNG image
+ */
+function exportImage() {
+    const svgEl = document.getElementById('sankey-chart');
+    if (!svgEl || !svgEl.querySelector('g')) {
+        updateStatus('⚠️ Nothing to export — load data first', 'error');
+        return;
+    }
+
+    updateStatus('Exporting PNG...', 'loading');
+
+    // Clone SVG and prepare for export
+    const clone = svgEl.cloneNode(true);
+    const bounds = svgEl.querySelector('.zoom-group').getBBox();
+    const transform = svgEl.querySelector('.zoom-group').getAttribute('transform');
+
+    // Set viewBox to capture full content with padding
+    const padding = 40;
+    clone.setAttribute('width', bounds.width + padding * 2);
+    clone.setAttribute('height', bounds.height + padding * 2);
+    clone.setAttribute('viewBox', `${bounds.x - padding} ${bounds.y - padding} ${bounds.width + padding * 2} ${bounds.height + padding * 2}`);
+
+    // Remove zoom transform so we get the full unzoomed diagram
+    const zoomGroup = clone.querySelector('.zoom-group');
+    if (zoomGroup) {
+        zoomGroup.removeAttribute('transform');
+    }
+
+    // Add background
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bg.setAttribute('x', bounds.x - padding);
+    bg.setAttribute('y', bounds.y - padding);
+    bg.setAttribute('width', bounds.width + padding * 2);
+    bg.setAttribute('height', bounds.height + padding * 2);
+    bg.setAttribute('fill', '#1a1a2e');
+    clone.insertBefore(bg, clone.firstChild);
+
+    // Add inline styles for text
+    clone.querySelectorAll('.node-label').forEach(el => {
+        el.style.fontSize = '10px';
+        el.style.fill = '#b0bec5';
+    });
+    clone.querySelectorAll('.layer-header').forEach(el => {
+        el.style.fontSize = '11px';
+        el.style.fontWeight = '600';
+    });
+
+    // Serialize SVG
+    const serializer = new XMLSerializer();
+    const svgString = serializer.serializeToString(clone);
+    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
+
+    // Render to canvas
+    const img = new Image();
+    img.onload = () => {
+        const scale = 2; // 2x resolution for clarity
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        const ctx = canvas.getContext('2d');
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+
+        // Download
+        canvas.toBlob(blob => {
+            const a = document.createElement('a');
+            const mdsoRef = document.getElementById('mdso-ref').value || 'diagram';
+            a.download = `traceability-${mdsoRef}-${new Date().toISOString().slice(0, 10)}.png`;
+            a.href = URL.createObjectURL(blob);
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(a.href);
+            updateStatus(`✅ Exported ${a.download}`, 'success');
+        }, 'image/png');
+    };
+    img.onerror = () => {
+        URL.revokeObjectURL(url);
+        updateStatus('❌ PNG export failed. Try SVG export instead.', 'error');
+    };
+    img.src = url;
+}
+
+/**
+ * Export the diagram as an SVG file
+ */
+function exportSVG() {
+    const svgEl = document.getElementById('sankey-chart');
+    if (!svgEl || !svgEl.querySelector('g')) {
+        updateStatus('⚠️ Nothing to export — load data first', 'error');
+        return;
+    }
+
+    // Clone SVG and prepare for export
+    const clone = svgEl.cloneNode(true);
+    const bounds = svgEl.querySelector('.zoom-group').getBBox();
+
+    // Set viewBox to capture full content
+    const padding = 40;
+    clone.setAttribute('width', bounds.width + padding * 2);
+    clone.setAttribute('height', bounds.height + padding * 2);
+    clone.setAttribute('viewBox', `${bounds.x - padding} ${bounds.y - padding} ${bounds.width + padding * 2} ${bounds.height + padding * 2}`);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+
+    // Remove zoom transform
+    const zoomGroup = clone.querySelector('.zoom-group');
+    if (zoomGroup) {
+        zoomGroup.removeAttribute('transform');
+    }
+
+    // Add background
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bg.setAttribute('x', bounds.x - padding);
+    bg.setAttribute('y', bounds.y - padding);
+    bg.setAttribute('width', bounds.width + padding * 2);
+    bg.setAttribute('height', bounds.height + padding * 2);
+    bg.setAttribute('fill', '#1a1a2e');
+    clone.insertBefore(bg, clone.firstChild);
+
+    // Add styles inline
+    const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+    style.textContent = `
+        .node-label { font: 10px -apple-system, sans-serif; fill: #b0bec5; }
+        .layer-header { font: 600 11px -apple-system, sans-serif; }
+    `;
+    clone.insertBefore(style, clone.firstChild);
+
+    // Serialize and download
+    const serializer = new XMLSerializer();
+    const svgString = '<?xml version="1.0" encoding="UTF-8"?>\n' + serializer.serializeToString(clone);
+    const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const a = document.createElement('a');
+    const mdsoRef = document.getElementById('mdso-ref').value || 'diagram';
+    a.download = `traceability-${mdsoRef}-${new Date().toISOString().slice(0, 10)}.svg`;
+    a.href = URL.createObjectURL(blob);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    updateStatus(`✅ Exported ${a.download}`, 'success');
+}

@@ -93,6 +93,11 @@
             color: #ffab40;
         }
 
+        .btn-export {
+            border-color: #80deea;
+            color: #80deea;
+        }
+
         .legend {
             display: flex;
             gap: 0.7rem;
@@ -232,6 +237,8 @@
         <button class="btn btn-green" id="importBtn" onclick="document.getElementById('json-file').click()">Import JSON</button>
         <button class="btn btn-green" id="pasteBtn" onclick="pasteFromClipboard()">Paste JSON</button>
         <button class="btn btn-reset" id="resetZoomBtn" onclick="resetZoom()">Reset Zoom</button>
+        <button class="btn btn-export" id="exportBtn" onclick="exportImage()">Export PNG</button>
+        <button class="btn btn-export" id="exportSvgBtn" onclick="exportSVG()">Export SVG</button>
         <input type="file" id="json-file" accept=".json" style="display:none" onchange="importJSONFile(event)">
         <div class="legend" id="legend"></div>
     </header>
