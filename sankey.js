@@ -116,7 +116,7 @@ function renderSankey(traceData, mdsoRef) {
     // Make width much wider than height to spread columns apart
     const numColumns = presentLayers.length;
     const virtualHeight = Math.max(innerHeight, maxNodesInLayer * (adaptivePadding + 3));
-    const virtualWidth = Math.max(innerWidth, numColumns * 300);
+    const virtualWidth = Math.max(innerWidth, numColumns * 500);
 
     console.log('[Sankey] Max nodes in layer:', maxNodesInLayer, '| Padding:', adaptivePadding, '| Virtual:', virtualWidth, 'x', virtualHeight);
 
@@ -293,13 +293,11 @@ function fitToContent(svg, zoomGroup, width, height, margin) {
     const bounds = zoomGroup.node().getBBox();
     if (bounds.width === 0 || bounds.height === 0) return;
 
-    // Fit to width primarily, allow vertical panning
-    const scaleX = (width - 40) / bounds.width;
-    const scaleY = (height - 40) / bounds.height;
-    const scale = Math.min(scaleX, scaleY, 2.0);
+    // Fit to width so all columns are visible; user pans vertically
+    const scale = Math.min((width - 40) / bounds.width, 1.5);
 
-    const tx = (width - bounds.width * scale) / 2 - bounds.x * scale;
-    const ty = 20 - bounds.y * scale; // Align to top with small margin
+    const tx = 20 - bounds.x * scale;
+    const ty = (height - bounds.height * scale) / 2 - bounds.y * scale;
 
     const transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
     svg.call(zoomBehavior.transform, transform);
@@ -412,23 +410,49 @@ function loadFromJSON(data) {
         return;
     }
 
-    // Assign layers based on node type (used for coloring and column placement)
-    // But respect the actual link structure for positioning
+    // Assign each type to its own column for maximum separation
+    const TYPE_TO_LAYER = {
+        'objective': 0,
+        'initiative': 1,
+        'project': 2,
+        'epic': 3,
+        'feature': 3,
+        'story': 4,
+        'p story': 4,
+        'task': 5,
+        'p task': 5,
+        'bug': 6,
+        'risk': 7,
+        'request': 7,
+        'problem': 7,
+        'hosting access': 7,
+        'pr': 8,
+        'pull request': 8,
+        'release': 9,
+        'deployment': 10,
+    };
+
     data.nodes.forEach(node => {
         const type = (node.type || '').toLowerCase();
-        if (type.includes('objective')) node.layer = 0;
-        else if (type.includes('initiative')) node.layer = 1;
-        else if (type === 'project' || (type.includes('mdso') && type.includes('project'))) node.layer = 2;
-        else if (type.includes('epic') || type.includes('feature')) node.layer = 3;
-        else if (type.includes('story') || type.includes('task') || type.includes('bug') || type.includes('risk') || type.includes('request') || type.includes('problem') || type.includes('access')) node.layer = 4;
-        else if (type === 'pr' || type.includes('pull')) node.layer = 5;
-        else if (type.includes('release')) node.layer = 6;
-        else if (type.includes('deploy')) node.layer = 7;
-        else node.layer = 4; // Default to story layer
+        if (TYPE_TO_LAYER[type] !== undefined) {
+            node.layer = TYPE_TO_LAYER[type];
+        } else {
+            // Fuzzy match
+            if (type.includes('objective')) node.layer = 0;
+            else if (type.includes('initiative')) node.layer = 1;
+            else if (type.includes('project')) node.layer = 2;
+            else if (type.includes('epic') || type.includes('feature')) node.layer = 3;
+            else if (type.includes('story')) node.layer = 4;
+            else if (type.includes('task')) node.layer = 5;
+            else if (type.includes('bug')) node.layer = 6;
+            else if (type.includes('release')) node.layer = 9;
+            else if (type.includes('deploy')) node.layer = 10;
+            else if (type === 'pr' || type.includes('pull')) node.layer = 8;
+            else node.layer = 5;
+        }
     });
 
-    // For imported data, adjust layers so that links always flow forward.
-    // If a link goes from a higher layer to a lower layer, bump the target up.
+    // Propagate: ensure all links flow forward
     const nodeMap = new Map(data.nodes.map(n => [n.id, n]));
     let changed = true;
     let iterations = 0;
