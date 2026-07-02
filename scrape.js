@@ -30,7 +30,7 @@ const CONFIG = {
 
     // Crawl settings
     maxDepth: 6,
-    requestDelay: 400,
+    requestDelay: 1500,
 
     // Issue type → layer mapping
     // Flow: Objectives(0) → Initiatives(1) → MDSO Projects(2) → Epics/Features(3) → Stories(4) → PRs(5) → Releases(6) → Deployments(7)
@@ -378,8 +378,8 @@ async function apiGet(apiContext, endpoint) {
     try {
         const resp = await apiContext.get(endpoint);
         if (resp.status() === 429) {
-            console.log(`   ⏳ Rate limited, waiting 3s...`);
-            await sleep(3000);
+            console.log(`\n   ⏳ Rate limited, waiting 10s...`);
+            await sleep(10000);
             return apiGet(apiContext, endpoint);
         }
         if (resp.status() === 404) return null;
